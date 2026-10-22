@@ -1,0 +1,637 @@
+[
+  {
+    "replying_to": "Replying to FlashFFTConv: Efficient Convolutions for Long Sequences with Tensor Cores",
+    "display_title": "Official Review of Submission8584 by Reviewer 8BY8",
+    "content": {
+      "summary": {
+        "value": "The paper proposes FlashFFTConv, a new algorithm for computing FFT on GPUs. This algorithm is more efficient than existing methods and can be used to accelerate a variety of machine learning tasks, especially for the long-sequence tasks. The author proposes approximation algorithms by leveraging the sparsity."
+      },
+      "soundness": {
+        "value": "3 good",
+        "description": "3 good"
+      },
+      "presentation": {
+        "value": "3 good",
+        "description": "3 good"
+      },
+      "contribution": {
+        "value": "3 good",
+        "description": "3 good"
+      },
+      "strengths": {
+        "value": "1. The paper is well organized and easy to follow.\n2. The implementation is in the supplementary material. The appendices provide many details.\n3. The method is solid and the experiments are convincing."
+      },
+      "weaknesses": {
+        "value": "### Major issues\n1. My understanding is that the main algorithm is arithmetic equivalent to the standard FFT. In other words, the proposed methods can be seen as an implementation of the FFT without any approximations. The method in Section 3.3 is an approximation algorithm. Is it correct?\n2. FlashAttention is a great success since the attention is a \"new\" operator and lack efficient implementation. However, FFT is a standard operator with long history. Specifically, the Monarch FFT Decomposition was developed in the last century. Considering that this algorithm is not new and GPU engineers can handle the memory hierarchy and other hardware specifications properly, why this method was not developed previously?\nI do not know the detailed algorithms in the cuFFT library, which is assumed to be highly-optimized. What is the reason of better performance of FlashFFTConv over cuFFT, (1) the better algorithm, i.e., Monarch FFT Decomposition, or (2) a better implementation considering the GPU architecture?\n3. In Table 3, FlashFFTConv outperforms torch.fft by up to 8.7×, while the speedup is about 2x without the domain-specific optimizations. Does it mean the major speedup comes from the domain-specific optimizations instead of the FlashFFTConv algorithm? Could the authors conduct this ablation study (with and without the domain-specific optimizations) in other experiments?\n4. When analyzing Table 4, the authors claim that \"speedup varies by the size of the models and the relative amount of time spent computing the convolution compared to other parts of the models\". Please provide the quantitative results, e.g., the relative amount of time spent computing the convolution.\n\n### Minor issues\n1. What about the results on small and medium sequence tasks?\n2. Other than the machine learning applications, FFT is widely used in many fields. It is better to expand the scope of the paper. What about the results in signal processing?"
+      },
+      "questions": {
+        "value": "1. What are the limitations and extensions of the method?\n2. What is the potential negative impact of the method? Can we always obtain better performance on FlashFFTConv over cuFFT?"
+      },
+      "flag_for_ethics_review": {
+        "value": [
+          "No ethics review needed."
+        ],
+        "descriptions": [
+          "No ethics review needed."
+        ]
+      },
+      "rating": {
+        "value": "6: marginally above the acceptance threshold",
+        "description": "6: marginally above the acceptance threshold"
+      },
+      "confidence": {
+        "value": "5: You are absolutely certain about your assessment. You are very familiar with the related work and checked the math/other details carefully.",
+        "description": "5: You are absolutely certain about your assessment. You are very familiar with the related work and checked the math/other details carefully."
+      },
+      "code_of_conduct": {
+        "value": "Yes",
+        "description": "Yes"
+      }
+    },
+    "id": "cK3q1jlpgp",
+    "forum": "gPKTTAfYBp",
+    "replyto": "gPKTTAfYBp",
+    "signatures": [
+      "ICLR.cc/2024/Conference/Submission8584/Reviewer_8BY8"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2024/Conference",
+      "ICLR.cc/2024/Conference/Submission8584/Reviewer_8BY8"
+    ],
+    "number": 1,
+    "invitations": [
+      "ICLR.cc/2024/Conference/Submission8584/-/Official_Review",
+      "ICLR.cc/2024/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2024/Conference",
+    "tcdate": 1698731860417,
+    "cdate": 1698731860417,
+    "tmdate": 1700718002082,
+    "mdate": 1700718002082,
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission8584 by Reviewer 8BY8",
+    "display_title": "Response to Reviewer 8BY8",
+    "content": {
+      "title": {
+        "value": "Response to Reviewer 8BY8"
+      },
+      "comment": {
+        "value": "We thank the reviewer for their thoughtful comments and constructive feedback. Below, we answer specific questions about which algorithms are exact and which are approximate, and where the speedup comes from on different applications.\n\n**Approximation Algorithms**\nWe clarify that there are actually **three algorithmic contributions** in our paper. The main contribution is the FlashFFTConv algorithm, which is an **exact** FFT convolution algorithm.\n\nBut the structure of the FlashFFTConv algorithm allows immediate applications to sparsity – simply skipping portions of the matrix multiply operations yields sparse convolution algorithms. Partial convolutions and frequency-sparse convolutions are two approximate convolution algorithms that are enabled by the computational pattern of FlashFFTConv.\n\n**Why is this not in cuFFT?**\nIn short – a single FFT on its own is almost always memory-bound, so the most efficient FFT implementation does not need to use tensor cores or other optimization. In other words, the older FFT algorithms suffice. These are what cuFFT uses. Please see the common response for a more detailed discussion on the history of FFT algorithms, and why the FFT convolution presents specific bottlenecks. \n\nWhen fusing multiple FFT operations together, the entire operation becomes compute-bound, so different algorithms are necessary – which is why we need to translate the operation to use tensor cores.\n\nFinally, we note that the use case of long convolutions has started to show promise in ML applications only relatively recently. For example, S4 was only published at ICLR last year, and gated convolutional models that come close to attention performance in language modeling have only started to emerge this year. So compared to FlashAttention, which took 5 years between the introduction of attention and the first IO-aware algorithm, FlashFFTConv is moving relatively quickly!\n\n**More Detailed Breakdown of Speedup**\nThank you for the feedback to conduct a more detailed ablation study of the speedups. We have re-organized our convolution benchmarks to several distinct use cases:\n* A pure convolution, where the input and FFT size are the same length\n* A convolution with padding, where the input is half the length of the FFT size (i.e., causal convolution)\n* Gated convolutions, where there are gating operations before and after the convolution to fuse\n\nWe have chosen to split the benchmarks into these distinct use cases, instead of a single table with “domain-specific optimizations.” The full results are given in Appendices C.1 and C.2 of the updated draft.\n\n**Percentage of Time Each Model Spends Computing the Convolution**\nWe provide the percentage of time each model spends computing the convolution when implemented in PyTorch, and the relative speedup from using FlashFFTConv:\n\n|      **Model** | **% Time in Convolution** | **Speedup** |\n|---------------:|:-------------------------:|:-----------:|\n|    **M2-BERT** |           48.5%           |     1.9x    |\n|      **Hyena** |           38.4%           |     1.7x    |\n| **Long Convs** |           64.3%           |     2.4x    |\n|    **SaShiMi** |           22.1%           |     1.3x    |\n|   **HyenaDNA** |           81.8%           |     4.4x    |\n\nAs you can see, SaShiMi spends the least amount of time computing the convolution, and thus has the least amount of speedup. HyenaDNA spends the most amount of time in the convolution, and has the most speedup. We have added this table to Appendix C.\n\n**Results on Small and Medium Sequence Tasks**\nM2-BERT is a small-sequence task (sequence length 128, benchmarked in Table 4 of the original submission). We also provide benchmarks of Hyena-2.7B at different sequence lengths (2K-16K), and Hyena-s-4K, which are both medium-sequence tasks.\n\n**Applications Outside Machine Learning**\nThe FFT is very widely used outside of machine learning, so we look forward to applications outside of machine learning as exciting future work for this project. We have chosen to focus on machine learning applications for this paper, since ICLR is a machine learning conference. However, we note that S4/SaShiMi and Hyena, which we benchmark in the paper, are built on signal processing primitives. We also evaluate on HyenaDNA, a scientific application, and we are sure there are many others that may be relevant.\n\n**Limitations and Extensions of the Method**\nFor now, FlashFFTConv is limited to sequence lengths up to 4M. We look forward to further extending these sequence lengths, possibly to billions. This will require further innovation, since we will encounter GPU HBM limitations.\n\n**Potential Negative Impact**\nFor FFT convolutions, FlashFFTConv is faster across all sequence lengths. However, FlashFFTConv does currently not support fp32 precision, which could be necessary for some applications with high-precision requirements. Some FFT applications in science may require double precision, which FlashFFTConv currently does not support."
+      }
+    },
+    "id": "zyJWLJeXCL",
+    "forum": "gPKTTAfYBp",
+    "replyto": "cK3q1jlpgp",
+    "signatures": [
+      "ICLR.cc/2024/Conference/Submission8584/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2024/Conference",
+      "ICLR.cc/2024/Conference/Submission8584/Authors"
+    ],
+    "number": 5,
+    "invitations": [
+      "ICLR.cc/2024/Conference/Submission8584/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2024/Conference",
+    "tcdate": 1700115178753,
+    "cdate": 1700115178753,
+    "tmdate": 1700115178753,
+    "mdate": 1700115178753,
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Response to Reviewer 8BY8",
+    "display_title": "Thanks for the response.",
+    "content": {
+      "title": {
+        "value": "Thanks for the response."
+      },
+      "comment": {
+        "value": "I really appreciate the authors' response. I raised my score from 5 to 6."
+      }
+    },
+    "id": "qJngYO1I1c",
+    "forum": "gPKTTAfYBp",
+    "replyto": "zyJWLJeXCL",
+    "signatures": [
+      "ICLR.cc/2024/Conference/Submission8584/Reviewer_8BY8"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2024/Conference",
+      "ICLR.cc/2024/Conference/Submission8584/Reviewer_8BY8"
+    ],
+    "number": 7,
+    "invitations": [
+      "ICLR.cc/2024/Conference/Submission8584/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2024/Conference",
+    "tcdate": 1700717890165,
+    "cdate": 1700717890165,
+    "tmdate": 1700717890165,
+    "mdate": 1700717890165,
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to FlashFFTConv: Efficient Convolutions for Long Sequences with Tensor Cores",
+    "display_title": "Official Review of Submission8584 by Reviewer Bh63",
+    "content": {
+      "summary": {
+        "value": "In this paper, the authors propose an efficient method to compute the convolution of long sequences by exploiting new computational features available on modern GPUs, tensor cores. The motivation for this study comes from the long sequences that are typically encountered in language and time-series models that require large filters, in stark contrast with the usually small filters utilized in convolutional vision models. The method is based on a matrix interpretation of the FFT algorithm, specifically a p-Monarch formulation, that decomposes the FFT operations into a small set of multiplications that are performed using the much higher arithmetical intensity afforded by tensor cores on modern A100 and H100 GPUs. The authors discuss several algorithmic details required to achieve high performance using this FFT expression, such as parallelizing over the sequence, instead of a direct distribution of work over the batch and hidden dimension and exploiting several properties related to the nature of the FFTs of interest to large sequence models, such as folding a K element real-to-real transform into a K/2 complex transform. With these observations, the authors were able to significantly extend the applicability of the proposed method to sequences up to 32K 16-bit entries processed within a single threadblock. Performance studies on long sequences demonstrate the performance improvements achieved compared to the baseline FFT implementation available in PyTorch and a fused version implemented using the cuFFTdx library."
+      },
+      "soundness": {
+        "value": "3 good",
+        "description": "3 good"
+      },
+      "presentation": {
+        "value": "3 good",
+        "description": "3 good"
+      },
+      "contribution": {
+        "value": "3 good",
+        "description": "3 good"
+      },
+      "strengths": {
+        "value": "- Generally well-written with an extensive presentation of the algorithmic and system-related details provided in the appendices.\n- Highlights a key difference between traditional convolution filter sizes present in vision models versus larger models and utilizes a decomposition that takes into account modern architectural features available on GPUs, tensor cores specifically.\n- The proposed strategy to process the inputs over sequences effectively maximizes the number of elements that may be processed in a single thread block and maximally utilizes the tensor cores with more work per block.\n- By fusing multiple operations into a single kernel the authors increase the arithmetic intensity of the conv kernel to move it away from the memory boundness of a single FFT call to a more compute-rich fused counterpart."
+      },
+      "weaknesses": {
+        "value": "Major:\n- I would appreciate a clearer distinction between the order-p Monarch FFT and the classic (Bailey) 4-step FFT. The 4-step FFT may also be computed using the Fourier matrices in $\\mathcal{O}(n^2)$ work but, as noted in the text, this expense is reduced substantially by realizing a DFT will perform the same action in $\\mathcal{O}(n \\log n)$ work. It's not clear from the description how the reader to reconcile these 2 competing ideas regarding the reduction in computational work and improvement in overall performance. I suppose the idea is that although the algorithmic expense of the matrix formulation is higher the small sizes of the blocked inputs coupled with the increased throughput of the tensor core units vs the general arithmetic path makes the overall algorithm performance profitable, is that the correct way to think about this issue?\n\nMinor:\n- HBM in section 2.2 introduced as global memory instead of high-bandwidth memory\n- I'm not convinced Figure 2 adds any meaningful insight into the differences between the different broadcasting strategies. Parallelization over the batch and hidden dimensions seems clear but the alternate strategy to parallelize over sequences is less informative.\n- $\\sigma_H$ and $\\sigma_S$ are defined in section 3.3 but never referenced in the cost model or definition of $w(i)$.\n- The components of the cost model could use a bit more explanation to ensure the reader is aware of the origin of each component and its relationship to the algorithmic definition.\n- Is the precision of the datatypes ever mentioned in the main text? I see it is referenced in Appendix D as a 16-bit type."
+      },
+      "questions": {
+        "value": "- Are the arrows in Figure 3 in the correct positions? The text references tradeoff or crossover points between the different order-p decompositions being of interest but 2 of the arrows seem to reference downward slopes. Maybe I'm interpreting either the text or the graph incorrectly.\n- Does the cufftDx variation use also fold the inputs to perform an order N/2 complex transform instead of an order N real-to-real transform?"
+      },
+      "flag_for_ethics_review": {
+        "value": [
+          "No ethics review needed."
+        ],
+        "descriptions": [
+          "No ethics review needed."
+        ]
+      },
+      "rating": {
+        "value": "8: accept, good paper",
+        "description": "8: accept, good paper"
+      },
+      "confidence": {
+        "value": "3: You are fairly confident in your assessment. It is possible that you did not understand some parts of the submission or that you are unfamiliar with some pieces of related work. Math/other details were not carefully checked.",
+        "description": "3: You are fairly confident in your assessment. It is possible that you did not understand some parts of the submission or that you are unfamiliar with some pieces of related work. Math/other details were not carefully checked."
+      },
+      "code_of_conduct": {
+        "value": "Yes",
+        "description": "Yes"
+      }
+    },
+    "id": "DeYQlcn21x",
+    "forum": "gPKTTAfYBp",
+    "replyto": "gPKTTAfYBp",
+    "signatures": [
+      "ICLR.cc/2024/Conference/Submission8584/Reviewer_Bh63"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2024/Conference",
+      "ICLR.cc/2024/Conference/Submission8584/Reviewer_Bh63"
+    ],
+    "number": 2,
+    "invitations": [
+      "ICLR.cc/2024/Conference/Submission8584/-/Official_Review",
+      "ICLR.cc/2024/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2024/Conference",
+    "tcdate": 1698807000036,
+    "cdate": 1698807000036,
+    "tmdate": 1699637074009,
+    "mdate": 1699637074009,
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission8584 by Reviewer Bh63",
+    "display_title": "Response to Reviewer Bh63",
+    "content": {
+      "title": {
+        "value": "Response to Reviewer Bh63"
+      },
+      "comment": {
+        "value": "We thank the reviewer for the positive feedback. We answer the questions below:\n\n**Differences between Monarch, Bailey, and 4-step FFT.** Mathematically, all these algorithms are equivalent to each other. For a more in-depth discussion, Van Loan [1] is a great resource on how different FFT algorithms are almost always mathematically equivalent, but use different decomposition strategies for computational reasons.\n\nHistorically, Bailey’s FFT algorithm has focused on the **data movement** aspects of the FFT computation – it was designed for settings where the entire input cannot fit into the local memory of a machine. In this way, it is similar to a streaming multiprocessor on a GPU; a single streaming multiprocessor has a limited amount of SRAM available to store the input, so longer sequences require communication to HBM.\n\nThe major distinction in the Monarch decomposition is the emphasis on the **compute units** used to compute the individual FFT operations. In the Monarch decomposition, the individual FFT operations are computed using a dense matrix multiply operation. As the reviewer notes, this incurs higher absolute FLOP cost than an $O(N log N)$ algorithm – but the increased throughput of the tensor core units makes up for it.\n\nIn FlashFFTConv, we are careful to balance the sizes of the matrix multiply operations with the tensor core units available; we usually only compute 16x16 matrix multiplies, or 32x32 (the tensor cores are 16x16-sized). Larger matrices incur too much additional FLOP cost to be worth it - this is why the blue line in the cost model in figure 3 rises above the rest.\n\n**Sequence Length vs. Batch/Head Parallelism.** \nThank you for the feedback on Figure 2. Our main point is that we can express multiple parallel FFT operations as a single matrix-matrix multiply operation. We have updated Figure 2, and we welcome additional feedback about its clarity.\n\n**Cost Model**\nThank you for the feedback on the clarity. We have added additional exposition around the components of the cost model. $\\omega(i)$ is just a helper function that lets us simplify the expression a little by not needing to separate out HBM and SRAM intermediates into different functions.\n\n$\\omega(i)$ returns $\\sigma_H$ if the intermediates of step $i$ of the decomposition need to be stored in HBM, and $\\sigma_S$ if they can be stored in SRAM.\n\n**Precision of Datatypes**\nPlease see the common response for a discussion about precision of the method.\n\n**Arrows in Figure 3**\nThese arrows refer to the “humps” for $p=3$ and $p=4$ for short sequence lengths – cost is high even though overall FLOP cost is low, since those FLOPs do not fully utilize tensor cores. We have updated the figure in the draft to try to make this more clear, and welcome further feedback.\n\n**cufftDx Variant**\nYes, the cufftDx variant also uses the N/2 trick for the real-to-real transform.\n\n[1] Charles Van Loan, Computational Frameworks for the Fast Fourier Transform. 1992."
+      }
+    },
+    "id": "H0daIxaAbg",
+    "forum": "gPKTTAfYBp",
+    "replyto": "DeYQlcn21x",
+    "signatures": [
+      "ICLR.cc/2024/Conference/Submission8584/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2024/Conference",
+      "ICLR.cc/2024/Conference/Submission8584/Authors"
+    ],
+    "number": 4,
+    "invitations": [
+      "ICLR.cc/2024/Conference/Submission8584/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2024/Conference",
+    "tcdate": 1700115000534,
+    "cdate": 1700115000534,
+    "tmdate": 1700115000534,
+    "mdate": 1700115000534,
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Response to Reviewer Bh63",
+    "display_title": "Official Comment by Reviewer Bh63",
+    "content": {
+      "comment": {
+        "value": "I thank the authors for their detailed responses that satisfied my initial inquiries. Given their response to my questions and other reviewers I will keep my current rating the same.\n\nI have one additional suggestion regarding the discussion of the use of tensor cores. The tensor core API does not support complex datatypes but you are folding the N-length real-valued input into a N/2-length complex-valued input, is the impact of this data transformation reflected anywhere in the description of the implementation? I'm curious if it's as simple as invoking the wmma operation twice on the real and complex portions of the inputs."
+      }
+    },
+    "id": "J92i7DFRKu",
+    "forum": "gPKTTAfYBp",
+    "replyto": "H0daIxaAbg",
+    "signatures": [
+      "ICLR.cc/2024/Conference/Submission8584/Reviewer_Bh63"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2024/Conference",
+      "ICLR.cc/2024/Conference/Submission8584/Reviewer_Bh63"
+    ],
+    "number": 6,
+    "invitations": [
+      "ICLR.cc/2024/Conference/Submission8584/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2024/Conference",
+    "tcdate": 1700714105711,
+    "cdate": 1700714105711,
+    "tmdate": 1700714105711,
+    "mdate": 1700714105711,
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to FlashFFTConv: Efficient Convolutions for Long Sequences with Tensor Cores",
+    "display_title": "Official Review of Submission8584 by Reviewer pq6T",
+    "content": {
+      "summary": {
+        "value": "This paper proposed to improve the Fast Fourier Transform in the long convolution operation by better utilizing hardware advances. Concretely, it first decoupled the matrix to smaller components such that they can be computed via matrix multiply units (Tensor Cores) in hardwares. Second, through monarch decomposition, it allows the proposed algorithm to process much longer sequences under the constrains of shared memory of GPUs.\n\nExperiments on Hyena and M2-Bert demonstrate that the proposed algorithm achieved significant efficiency, while does not hurt model performance."
+      },
+      "soundness": {
+        "value": "4 excellent",
+        "description": "4 excellent"
+      },
+      "presentation": {
+        "value": "3 good",
+        "description": "3 good"
+      },
+      "contribution": {
+        "value": "4 excellent",
+        "description": "4 excellent"
+      },
+      "strengths": {
+        "value": "1. This paper aims to solve an import problem in long-sequence convolution computation: poor hardware utilization for FFT.\n\n2. The proposed algorithm achieved significant efficiency, while maintaining model accuracy/performance."
+      },
+      "weaknesses": {
+        "value": "NA."
+      },
+      "questions": {
+        "value": "One question is about the precision of the proposed algorithm: since all the intermediate computations are performed using bf16/fp16, I was wondering how precise they are when comparing with the vanilla FFT implementation under fp32."
+      },
+      "flag_for_ethics_review": {
+        "value": [
+          "No ethics review needed."
+        ],
+        "descriptions": [
+          "No ethics review needed."
+        ]
+      },
+      "rating": {
+        "value": "8: accept, good paper",
+        "description": "8: accept, good paper"
+      },
+      "confidence": {
+        "value": "4: You are confident in your assessment, but not absolutely certain. It is unlikely, but not impossible, that you did not understand some parts of the submission or that you are unfamiliar with some pieces of related work.",
+        "description": "4: You are confident in your assessment, but not absolutely certain. It is unlikely, but not impossible, that you did not understand some parts of the submission or that you are unfamiliar with some pieces of related work."
+      },
+      "code_of_conduct": {
+        "value": "Yes",
+        "description": "Yes"
+      }
+    },
+    "id": "4Fe5WNpdjU",
+    "forum": "gPKTTAfYBp",
+    "replyto": "gPKTTAfYBp",
+    "signatures": [
+      "ICLR.cc/2024/Conference/Submission8584/Reviewer_pq6T"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2024/Conference",
+      "ICLR.cc/2024/Conference/Submission8584/Reviewer_pq6T"
+    ],
+    "number": 3,
+    "invitations": [
+      "ICLR.cc/2024/Conference/Submission8584/-/Official_Review",
+      "ICLR.cc/2024/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2024/Conference",
+    "tcdate": 1699085527770,
+    "cdate": 1699085527770,
+    "tmdate": 1699637073901,
+    "mdate": 1699637073901,
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission8584 by Reviewer pq6T",
+    "display_title": "Response to Reviewer pq6T",
+    "content": {
+      "title": {
+        "value": "Response to Reviewer pq6T"
+      },
+      "comment": {
+        "value": "We thank the reviewer for the positive feedback. For the question about the precision of the method, please refer to the table in the common response."
+      }
+    },
+    "id": "fylkXHKZ82",
+    "forum": "gPKTTAfYBp",
+    "replyto": "4Fe5WNpdjU",
+    "signatures": [
+      "ICLR.cc/2024/Conference/Submission8584/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2024/Conference",
+      "ICLR.cc/2024/Conference/Submission8584/Authors"
+    ],
+    "number": 3,
+    "invitations": [
+      "ICLR.cc/2024/Conference/Submission8584/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2024/Conference",
+    "tcdate": 1700114916525,
+    "cdate": 1700114916525,
+    "tmdate": 1700114916525,
+    "mdate": 1700114916525,
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to FlashFFTConv: Efficient Convolutions for Long Sequences with Tensor Cores",
+    "display_title": "Common Response (1/2)",
+    "content": {
+      "title": {
+        "value": "Common Response (1/2)"
+      },
+      "comment": {
+        "value": "We thank all the reviewers for their time and effort reviewing our paper and for their constructive comments, which have made our paper stronger. We appreciate the positive feedback that our work solves an “important problem” (reviewer pq6T) with a “solid” method and “convincing” experiments (reviewer 8BY8). In this common response, we address some common questions that were brought up by multiple reviewers: a summary of why we need a new algorithm for FFT convolution now (even though FFT has been around for decades) and the precision of the inputs & numerical error.\n\nWe’re also excited to report that FlashFFTConv has already started to see some adoption to train new models since our initial submission – it is being used to train long-context retrieval models, and to scale up hybrid gated convolution-attention architectures that rival the best open-source LLMs in quality. We're excited by this rapid adoption and impact, and **appreciate your help in making this work better and even more impactful!**\n\n# Why do we need to optimize the FFT Convolution?\nA question brought up by multiple reviewers (Bh63, 8BY8) was why we need to be developing new algorithms for the FFT convolution now, when the FFT has existed in different guises for half a century, and when there have been so many algorithms for the FFT in the past.\n\nThe key is that we have a **new use case, with new hardware and bottlenecks.** In our case, a recent wave of new ML architectures such as S4, Hyena, BiGS, CKConv, M2, and more [1-5] require optimization of the FFT convolution, and the characteristics of ML accelerators such as GPUs introduce new bottlenecks around I/O and utilizing matrix-multiply units. \n\nAs an aside – developing new FFT algorithms for new bottlenecks has actually been common in the history of the FFT – the “FFT algorithm” is not actually one algorithm, but many different algorithms. These algorithms are all mathematically-equivalent to each other, but they are computationally different depending on the compute and memory characteristics of the systems of the day. For instance, see:\n* Winograd FFT [6] to minimize multiplication vs. addition (for old hardware platforms where multiplication was more expensive than addition)\n* Bailey’s FFT [7] was originally designed to distribute extremely long FFTs that did not fit in the local memory of a single machine – and is primarily focused with the memory access pattern.\n* Hexagonal FFT [8] for data sampled on hexagonal grids\n\nFlashFFTConv is another step in this line of new FFT algorithms designed for new hardware bottlenecks. There are two important points:\n* The convolution requires FFT, pointwise multiply, and inverse FFT. This has a different **memory-compute tradeoff** than a single FFT operation.\n  * Indeed, a **single FFT** does not have this tradeoff, even on GPUs. On GPU, the compute is fast enough (even without tensor cores) that a single FFT is completely memory-bound – so it doesn’t matter if it’s computed with tensor cores or with general arithmetic operations. See below, for a single FFT of length 1K has similar runtime to torch.clone on H100 (and is actually slightly faster, which may indicate slightly better implementation than torch.clone):\n\n|   **Operation** | **Runtime (ms), B = 64, H = 768** |\n|----------------:|:---------------------------------:|\n| **torch.clone** |                0.31               |\n|         **FFT** |                0.27               |\n| **Fused FFTConv (no tensor cores)** | 0.67          |\n\n* When multiple steps of the FFT are fused together, then the memory-compute tradeoff changes, and a **fused FFT convolution is no longer memory-bound** (see the third row above, where a fused FFT convolution takes more time than just reading & writing the output).\n  * That is when it is important to use the tensor cores – compute becomes the bottleneck.\n\nThat memory-compute tradeoff is why the method is named FlashFFTConv, and not FlashFFT – we specifically focus on the tradeoffs for FFT convolutions on GPU. This is also the **primary difference** between the FlashFFTConv algorithm, and previous statements, like Bailey’s FFT decomposition or the four-step FFT decomposition. The core arithmetic is the same, but previous algorithms emphasize different bottlenecks (i.e., Bailey’s only focuses on the limits of local memory, not the compute units to compute the FFT).\n\nVan Loan [9] gives a good overview of frameworks for computing the FFT, and how they are all mathematically the same formulation, but with different compute characteristics, for those interested."
+      }
+    },
+    "id": "ihlMlHIazj",
+    "forum": "gPKTTAfYBp",
+    "replyto": "gPKTTAfYBp",
+    "signatures": [
+      "ICLR.cc/2024/Conference/Submission8584/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2024/Conference",
+      "ICLR.cc/2024/Conference/Submission8584/Authors"
+    ],
+    "number": 1,
+    "invitations": [
+      "ICLR.cc/2024/Conference/Submission8584/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2024/Conference",
+    "tcdate": 1700114849604,
+    "cdate": 1700114849604,
+    "tmdate": 1700114849604,
+    "mdate": 1700114849604,
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Common Response (1/2)",
+    "display_title": "Common Response (2/2)",
+    "content": {
+      "title": {
+        "value": "Common Response (2/2)"
+      },
+      "comment": {
+        "value": "# Precision of FlashFFTConv\nReviewers pq6T and Bh63 ask about the numerical precision of the method. We currently have implementations in fp16 and bf16.\n\nWe present some results on the numerical precision of the method, compared to an fp32 PyTorch implementation of the FFT convolution, for a sample of sequence lengths. We present $L_\\inf$ error, the maximum absolute error across the entire output:\n\n|          | **256** | **1K** | **4K** | **32K** | **1M** |\n|---------:|:-------:|:------:|:------:|:-------:|:------:|\n| **fp16** |  3.8e-6 | 7.6e-6 | 1.5e-5 |  6.5e-5 | 4.0e-4 |\n| **bf16** |  3.1e-5 | 3.1e-5 | 6.1e-5 |  6.1e-5 | 6.1e-5 |\n\nWe have added these results to the appendix. We plan to support fp32 in the future, but prioritized fp16 and bf16 initially since speed-sensitive training workloads generally train in half-precision (to make the MLPs faster).\n\n[1] Efficiently Modeling Long Sequences with Structured State Spaces. https://arxiv.org/abs/2111.00396 \n\n[2] Hyena Hierarchy: Towards Larger Convolutional Language Models. https://arxiv.org/abs/2302.10866 \n\n[3] Pretraining Without Attention. https://arxiv.org/abs/2212.10544 \n\n[4] CKConv: Continuous Kernel Convolution For Sequential Data. https://arxiv.org/abs/2102.02611 \n\n[5] Monarch Mixer: A Simple Sub-Quadratic GEMM-Based Architecture. https://arxiv.org/abs/2310.12109 \n\n[6] S. Winograd. On computing the discrete Fourier transform\" Math. Comp., 32 (1978) pp. 175–199.\n\n[7] Bailey’s FFT Algorithm. https://en.wikipedia.org/wiki/Bailey%27s_FFT_algorithm \n\n[8] Hexagonal fast Fourier Transform. https://en.wikipedia.org/wiki/Hexagonal_fast_Fourier_transform \n\n[9] Charles Van Loan, Computational Frameworks for the Fast Fourier Transform. 1992."
+      }
+    },
+    "id": "Ht30j7eEAE",
+    "forum": "gPKTTAfYBp",
+    "replyto": "ihlMlHIazj",
+    "signatures": [
+      "ICLR.cc/2024/Conference/Submission8584/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2024/Conference",
+      "ICLR.cc/2024/Conference/Submission8584/Authors"
+    ],
+    "number": 2,
+    "invitations": [
+      "ICLR.cc/2024/Conference/Submission8584/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2024/Conference",
+    "tcdate": 1700114891885,
+    "cdate": 1700114891885,
+    "tmdate": 1700114891885,
+    "mdate": 1700114891885,
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to FlashFFTConv: Efficient Convolutions for Long Sequences with Tensor Cores",
+    "display_title": "Meta Review of Submission8584 by Area Chair MUjn",
+    "content": {
+      "metareview": {
+        "value": "The paper proposes a new algorithm for computing convolutions via FFT, specifically useful for long-sequence tasks, more effectively on recent GPUs leveraging tensor core hardware.\n\nReviewers were consistently positive about the paper, and liked the overall contributions made. This includes convincing experimental results, sufficient novelty and a clearly written paper, overall well-deserving acceptance.\n\nWe hope the authors will incorporate the several minor points mentioned by the reviewers during the discussions."
+      },
+      "justification_for_why_not_higher_score": {
+        "value": "Overall convolution based method are still less in the spotlight compared to transformers, even for long range tasks, but it remains to be seen if this paper can slightly move the needle on this"
+      },
+      "justification_for_why_not_lower_score": {
+        "value": "All reviewers recommend accept"
+      }
+    },
+    "id": "6Ctthx5dDa",
+    "forum": "gPKTTAfYBp",
+    "replyto": "gPKTTAfYBp",
+    "signatures": [
+      "ICLR.cc/2024/Conference/Submission8584/Area_Chair_MUjn"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2024/Conference",
+      "ICLR.cc/2024/Conference/Submission8584/Senior_Area_Chairs",
+      "ICLR.cc/2024/Conference/Submission8584/Area_Chair_MUjn"
+    ],
+    "number": 1,
+    "invitations": [
+      "ICLR.cc/2024/Conference/Submission8584/-/Meta_Review",
+      "ICLR.cc/2024/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2024/Conference",
+    "tcdate": 1702248907809,
+    "cdate": 1702248907809,
+    "tmdate": 1708115474819,
+    "mdate": 1708115474819,
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to FlashFFTConv: Efficient Convolutions for Long Sequences with Tensor Cores",
+    "display_title": "Paper Decision",
+    "content": {
+      "title": {
+        "value": "Paper Decision"
+      },
+      "decision": {
+        "value": "Accept (poster)",
+        "description": "Accept (poster)"
+      },
+      "comment": {
+        "value": ""
+      }
+    },
+    "id": "TofEBOybxT",
+    "forum": "gPKTTAfYBp",
+    "replyto": "gPKTTAfYBp",
+    "signatures": [
+      "ICLR.cc/2024/Conference/Program_Chairs"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2024/Conference",
+      "ICLR.cc/2024/Conference/Program_Chairs"
+    ],
+    "number": 1,
+    "invitations": [
+      "ICLR.cc/2024/Conference/Submission8584/-/Decision",
+      "ICLR.cc/2024/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2024/Conference",
+    "tcdate": 1705405989394,
+    "cdate": 1705405989394,
+    "tmdate": 1708116171083,
+    "mdate": 1708116171083,
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to FlashFFTConv: Efficient Convolutions for Long Sequences with Tensor Cores",
+    "display_title": "Potential typo in equation (1)",
+    "content": {
+      "title": {
+        "value": "Potential typo in equation (1)"
+      },
+      "comment": {
+        "value": "It seems that equation (1) is not convolving over the input--the location i is fixed.\nIt should be $(u \\cdot k)[i] = \\sum_{j=0}^{N} u[i - j] \\cdot k[j]$\n?"
+      }
+    },
+    "id": "O1jJ1WUrfC",
+    "forum": "gPKTTAfYBp",
+    "replyto": "gPKTTAfYBp",
+    "signatures": [
+      "~Wenxuan_Tan1"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2024/Conference",
+      "~Wenxuan_Tan1"
+    ],
+    "number": 1,
+    "invitations": [
+      "ICLR.cc/2024/Conference/Submission8584/-/Public_Comment"
+    ],
+    "domain": "ICLR.cc/2024/Conference",
+    "tcdate": 1748622369735,
+    "cdate": 1748622369735,
+    "tmdate": 1748622369735,
+    "mdate": 1748622369735,
+    "parentInvitations": "ICLR.cc/2024/Conference/-/Public_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Potential typo in equation (1)",
+    "display_title": "Response",
+    "content": {
+      "title": {
+        "value": "Response"
+      },
+      "comment": {
+        "value": "Oh, good catch I think you’re right - we must have switched indexing at some point and missed it. We’ll fix it in the arxiv. Thanks for the comment!"
+      }
+    },
+    "id": "AOzPJEEjeA",
+    "forum": "gPKTTAfYBp",
+    "replyto": "O1jJ1WUrfC",
+    "signatures": [
+      "~Daniel_Fu1"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2024/Conference",
+      "~Daniel_Fu1"
+    ],
+    "number": 2,
+    "invitations": [
+      "ICLR.cc/2024/Conference/Submission8584/-/Public_Comment"
+    ],
+    "domain": "ICLR.cc/2024/Conference",
+    "tcdate": 1748623343887,
+    "cdate": 1748623343887,
+    "tmdate": 1748623343887,
+    "mdate": 1748623343887,
+    "parentInvitations": "ICLR.cc/2024/Conference/-/Public_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  }
+]

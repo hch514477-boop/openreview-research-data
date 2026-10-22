@@ -1,0 +1,707 @@
+[
+  {
+    "replying_to": "Replying to ChunkAttention: Efficient Attention on KV Cache with Chunking Sharing and Batching",
+    "display_title": "Official Review of Submission7819 by Reviewer oC3j",
+    "content": {
+      "summary": {
+        "value": "For auto-regressive large language models (LLMs), efficient attention contributes to cost-efficient serving. Inspired by the \"prompt engineering\" of LLM inference, this paper proposes a novel attention mechanism, named ChunkAttention. Since all requests to an LLM model may share the predefined prompt prefix, the authors build a prefix tree and match the common prefix. The common prefix can be computed only once, and all requests can share the computed key-value tensors. This results in saving both computation (no duplicate computation) and memory (no duplicate saving) thus enhancing the efficiency of online serving."
+      },
+      "soundness": {
+        "value": "2 fair",
+        "description": "2 fair"
+      },
+      "presentation": {
+        "value": "2 fair",
+        "description": "2 fair"
+      },
+      "contribution": {
+        "value": "3 good",
+        "description": "3 good"
+      },
+      "strengths": {
+        "value": "- The authors found a good optimization point from practical LLM serving scenarios.\n- The authors adopted a plausible abstraction--prefix tree--to realize their idea.\n- Figure 5 shows their contribution well, showing we can dramatically decrease the prompt encoding time."
+      },
+      "weaknesses": {
+        "value": "- The authors said that in their experiment workloads, \"all sequences within the same batch start and finish simultaneously\". However, I think the workload is overfitted to ChunkAttention. It seems more natural to send a trace of requests through a fixed time duration.\n    - For example, it would be helpful to understand ChunkAttention's contribution if I could compare under a similar workload to Figure 16 of the vLLM paper\n- Gathering that many batches (>= 32) is unlikely in practice. Even for a super high load scenario, requests would suffer from queueing delay, failing to meet SLA.\n- It would be more informative if a study about the chunk size existed."
+      },
+      "questions": {
+        "value": "- In Figure 4, why does the throughput decrease when the batch size becomes 128?\n- Although 1) naive, 2) xformers, and 3) FlashAttention do not support sharing, why does the naive version outperform the others?\n- When the model size grows on the same hardware (e.g., Lllama 13B in A100 80G), how does the result change? I think ChunkAttention can achieve more performance gain because it efficiently utilizes key-value cache memory compared to the baselines.\n- How long does it take to build the first prefix tree? For example, when $n_{s} = 8192$, I think it might take a non-negligible time."
+      },
+      "flag_for_ethics_review": {
+        "value": [
+          "No ethics review needed."
+        ],
+        "descriptions": [
+          "No ethics review needed."
+        ]
+      },
+      "rating": {
+        "value": "3: reject, not good enough",
+        "description": "3: reject, not good enough"
+      },
+      "confidence": {
+        "value": "5: You are absolutely certain about your assessment. You are very familiar with the related work and checked the math/other details carefully.",
+        "description": "5: You are absolutely certain about your assessment. You are very familiar with the related work and checked the math/other details carefully."
+      },
+      "code_of_conduct": {
+        "value": "Yes",
+        "description": "Yes"
+      }
+    },
+    "id": "lyMI0hXGR5",
+    "forum": "9k27IITeAZ",
+    "replyto": "9k27IITeAZ",
+    "signatures": [
+      "ICLR.cc/2024/Conference/Submission7819/Reviewer_oC3j"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2024/Conference",
+      "ICLR.cc/2024/Conference/Submission7819/Reviewer_oC3j"
+    ],
+    "number": 1,
+    "invitations": [
+      "ICLR.cc/2024/Conference/Submission7819/-/Official_Review",
+      "ICLR.cc/2024/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2024/Conference",
+    "tcdate": 1697966444977,
+    "cdate": 1697966444977,
+    "tmdate": 1699636957452,
+    "mdate": 1699636957452,
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission7819 by Reviewer oC3j",
+    "display_title": "Official Comment by Authors",
+    "content": {
+      "comment": {
+        "value": "> Question 1: In Figure 4, why does the throughput decrease when the batch size becomes 128?\n\n- Regarding the ChunkAttn implementation, it encompasses two CUDA kernel functions: chunk_first and seq_first.\n- In the case of seq_first, optimal GPU utilization occurs when attention_head_size multiplied by batch_size exceeds the GPU's streaming multiprocessor count. For head 32, when the batch size is greater than 48, the throughput stabilizes.\n- As for chunk_first, the kernel's performance primarily hinges on matrix multiplication. In theory, larger batches should yield improved throughput. However, our matrix multiplication implementation lacks fine-tuning for batch size 128, resulting in this regression.\n\n> Question 2: Although 1) naive, 2) xformers, and 3) FlashAttention do not support sharing, why does the naive version outperform the others?\n\n- xformers and FlashAttention focus on training instead of inference, which means they lack specifical design for generation: the Q in QKV is a vector instead matrix. \n- Flash attention has been aware of this issue and published Flash-decoding. From its [blog](https://pytorch.org/blog/flash-decoding/), we also could find the flash attention outperforms naive pytorch(figure3).\n\n> Question 3: When the model size grows on the same hardware (e.g., Lllama 13B in A100 80G), how does the result change? I think ChunkAttention can achieve more performance gain because it efficiently utilizes key-value cache memory compared to the baselines.\n\n- I believe ChunkAttention can yield greater performance gains due to its efficient utilization of key-value cache memory compared to the baseline methods. When the model size increases, ChunkAttention demonstrates improved performance for two reasons: 1. Enhanced utilization of L1/L2 cache, and 2. Memory savings from sharing that allow for larger acceptable batch sizes.\n- For comprehensive end-to-end testing of the entire model, more time might be required. This is due to vLLM employing numerous custom operators, necessitating the implementation of these same operators for fair comparison purposes.\n\n\n> Question 4: How long does it take to build the first prefix tree? For example, when $n_s=8192$, I think it might take a non-negligible time.\n\n- Let's consider this scenario: with 64 requests in the tree, each having $n_s=8192$, adding a new request ($n_s=8192, s_r=0.5$) takes about 2.5ms. I find this acceptable as the cost only occurs once when a new request is added.\n- The primary overhead in building the prefix tree arises from tensor copying and transposition. Our use of Torch significantly increases the time for this process. However, by employing our custom operators, this time can be significantly reduced, as confirmed by experiments on vllm."
+      }
+    },
+    "id": "RnqHB4Dsie",
+    "forum": "9k27IITeAZ",
+    "replyto": "lyMI0hXGR5",
+    "signatures": [
+      "ICLR.cc/2024/Conference/Submission7819/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2024/Conference",
+      "ICLR.cc/2024/Conference/Submission7819/Authors"
+    ],
+    "number": 4,
+    "invitations": [
+      "ICLR.cc/2024/Conference/Submission7819/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2024/Conference",
+    "tcdate": 1700299504895,
+    "cdate": 1700299504895,
+    "tmdate": 1700299546508,
+    "mdate": 1700299546508,
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission7819 by Reviewer oC3j",
+    "display_title": "[Important] Response Required to Authors' Rebuttal",
+    "content": {
+      "title": {
+        "value": "[Important] Response Required to Authors' Rebuttal"
+      },
+      "comment": {
+        "value": "Dear Reviewer oC3j,\n\nAs we progress through the review process for ICLR 2024, I would like to remind you of the importance of the rebuttal phase. The authors have submitted their rebuttals, and it is now imperative for you to engage in this critical aspect of the review process.\n\nPlease ensure that you read the authors' responses carefully and provide a thoughtful and constructive follow-up. Your feedback is not only essential for the decision-making process but also invaluable for the authors.\n\nThank you,\n\nICLR 2024 Area Chair"
+      }
+    },
+    "id": "MaKWVkNBep",
+    "forum": "9k27IITeAZ",
+    "replyto": "lyMI0hXGR5",
+    "signatures": [
+      "ICLR.cc/2024/Conference/Submission7819/Area_Chair_j8fz"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2024/Conference",
+      "ICLR.cc/2024/Conference/Submission7819/Area_Chair_j8fz"
+    ],
+    "number": 7,
+    "invitations": [
+      "ICLR.cc/2024/Conference/Submission7819/-/Official_Comment",
+      "ICLR.cc/2024/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2024/Conference",
+    "tcdate": 1701653739056,
+    "cdate": 1701653739056,
+    "tmdate": 1710476846411,
+    "mdate": 1710476846411,
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to [Important] Response Required to Authors' Rebuttal",
+    "display_title": "Response to AC and Authors",
+    "content": {
+      "title": {
+        "value": "Response to AC and Authors"
+      },
+      "comment": {
+        "value": "I checked the authors' response when it was posted, but it's my fault for not ack. \nMy simple questions are resolved, but I believe the paper can be much more improved when it has more experiments (related to the weaknesses that I stated).\nTherefore,  I decided to keep my original score at this time."
+      }
+    },
+    "id": "CPLafKY6xZ",
+    "forum": "9k27IITeAZ",
+    "replyto": "MaKWVkNBep",
+    "signatures": [
+      "ICLR.cc/2024/Conference/Submission7819/Reviewer_oC3j"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2024/Conference",
+      "ICLR.cc/2024/Conference/Submission7819/Reviewer_oC3j"
+    ],
+    "number": 9,
+    "invitations": [
+      "ICLR.cc/2024/Conference/Submission7819/-/Official_Comment",
+      "ICLR.cc/2024/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2024/Conference",
+    "tcdate": 1701695845427,
+    "cdate": 1701695845427,
+    "tmdate": 1710476846324,
+    "mdate": 1710476846324,
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to ChunkAttention: Efficient Attention on KV Cache with Chunking Sharing and Batching",
+    "display_title": "Official Review of Submission7819 by Reviewer ee1U",
+    "content": {
+      "summary": {
+        "value": "This paper proposes a new attention kernel design, ChunkAttention, that can chunk, share the KV cache, and batch the attention computation for a multi-tenant LLM inference setting where the sequences from users may share long prompt prefixes. ChunkAttention identifies the matching prompt prefixes across several sequences and reuses their KV cache by chunking the KV cache and embedding it into the auxillary prefix tree.  A 2-phase partitioning technique is also proposed to reduce the memory accesses on the KV cache during self-attention. Experimental results show ChunkAttention improves the self-attention speed by up to 3x."
+      },
+      "soundness": {
+        "value": "3 good",
+        "description": "3 good"
+      },
+      "presentation": {
+        "value": "3 good",
+        "description": "3 good"
+      },
+      "contribution": {
+        "value": "2 fair",
+        "description": "2 fair"
+      },
+      "strengths": {
+        "value": "1. The paper works on an important problem, i.e., accelerating self-attention kernels in LLMs.\n2. The paper flows well."
+      },
+      "weaknesses": {
+        "value": "1. The tehniques proposed by this paper work for only the multi-tenant LLM inference setting where the sequences from users may share long prompt prefixes. However, how frequent can this case happen? How to identify the same prompts between different users is still a problem.\n\n2. This authors did NOT compare ChunkAttention agasint prior token pruning techniques, e.g.,\n\nSehoon Kim, Sheng Shen, David Thorsley, Amir Gholami, Woosuk Kwon, Joseph Hassoun, and\nKurt Keutzer. Learned token pruning for transformers. In Aidong Zhang and Huzefa Rangwala\n(eds.), KDD ’22: The 28th ACM SIGKDD Conference on Knowledge Discovery and Data Mining,\nWashington, DC, USA, August 14 - 18, 2022, pp. 784–794. ACM, 2022. doi: 10.1145/3534678.\n3539260. URL https://doi.org/10.1145/3534678.3539260.\n\nor KV cache compression techniques, e.g., \nJesse Mu, Xiang Lisa Li, and Noah D. Goodman. Learning to compress prompts with gist tokens.\nCoRR, abs/2304.08467, 2023. doi: 10.48550/arXiv.2304.08467. URL https://doi.org/\n10.48550/arXiv.2304.08467."
+      },
+      "questions": {
+        "value": "Please comment on the points in the weakness section."
+      },
+      "flag_for_ethics_review": {
+        "value": [
+          "No ethics review needed."
+        ],
+        "descriptions": [
+          "No ethics review needed."
+        ]
+      },
+      "rating": {
+        "value": "5: marginally below the acceptance threshold",
+        "description": "5: marginally below the acceptance threshold"
+      },
+      "confidence": {
+        "value": "3: You are fairly confident in your assessment. It is possible that you did not understand some parts of the submission or that you are unfamiliar with some pieces of related work. Math/other details were not carefully checked.",
+        "description": "3: You are fairly confident in your assessment. It is possible that you did not understand some parts of the submission or that you are unfamiliar with some pieces of related work. Math/other details were not carefully checked."
+      },
+      "code_of_conduct": {
+        "value": "Yes",
+        "description": "Yes"
+      }
+    },
+    "id": "tICEz0XYcQ",
+    "forum": "9k27IITeAZ",
+    "replyto": "9k27IITeAZ",
+    "signatures": [
+      "ICLR.cc/2024/Conference/Submission7819/Reviewer_ee1U"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2024/Conference",
+      "ICLR.cc/2024/Conference/Submission7819/Reviewer_ee1U"
+    ],
+    "number": 2,
+    "invitations": [
+      "ICLR.cc/2024/Conference/Submission7819/-/Official_Review",
+      "ICLR.cc/2024/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2024/Conference",
+    "tcdate": 1698627354075,
+    "cdate": 1698627354075,
+    "tmdate": 1699636957344,
+    "mdate": 1699636957344,
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission7819 by Reviewer ee1U",
+    "display_title": "Official Comment by Authors",
+    "content": {
+      "comment": {
+        "value": "1.\tMany LLM applications have system prompts, and system prompts of some important applications like ChatGPT can contain thousands of tokens. Those tokens are shared between all users. We need more time to work out a solution to share the numbers in a compliant way\n2.\tWhile token pruning technology also aims to improve online inference performance, it works on different aspects. You can apply token pruning together with chunk-attention. We can reference those papers but I don’t think it’s necessary to compare the results"
+      }
+    },
+    "id": "DAWOCTibCb",
+    "forum": "9k27IITeAZ",
+    "replyto": "tICEz0XYcQ",
+    "signatures": [
+      "ICLR.cc/2024/Conference/Submission7819/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2024/Conference",
+      "ICLR.cc/2024/Conference/Submission7819/Authors"
+    ],
+    "number": 1,
+    "invitations": [
+      "ICLR.cc/2024/Conference/Submission7819/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2024/Conference",
+    "tcdate": 1700213701352,
+    "cdate": 1700213701352,
+    "tmdate": 1700213701352,
+    "mdate": 1700213701352,
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to ChunkAttention: Efficient Attention on KV Cache with Chunking Sharing and Batching",
+    "display_title": "Official Review of Submission7819 by Reviewer sEJt",
+    "content": {
+      "summary": {
+        "value": "This paper proposes ChunkAttention, a system optimization to enhance memory reuse within the KV cache in large language model inference workload. In order to boost the efficiency of self-attention for lengthy shared prompts, an efficient computational kernel based on a new tree-based organization of KV cache chunks, which involves the implementation of a two-phase partitioning approach to minimize memory operations on the shared KV cache during self-attention."
+      },
+      "soundness": {
+        "value": "3 good",
+        "description": "3 good"
+      },
+      "presentation": {
+        "value": "3 good",
+        "description": "3 good"
+      },
+      "contribution": {
+        "value": "4 excellent",
+        "description": "4 excellent"
+      },
+      "strengths": {
+        "value": "- Comprehensively, this paper discusses an important system optimization problem in LLM inference, which can introduce significant impact from both academia and industry. \n\n- The design and implementation of the advanced system optimization, especially the tree-based organization of KV-cache chunks is solid and reasonable.  \n\n- Most of the technique parts are well written, and easy to follow although it could be further polished."
+      },
+      "weaknesses": {
+        "value": "- My main concern about the paper is about its evaluation, which can be summarized as below:\n  - The organization of this section is unclear; concretely, there is a lack of formal description of the central hypothesis about the experiment design.\n  - The setup of the experiments is not clearly stated, I was expecting the experiments would be conducted on some real LLM e.g., Llama2; however, there is no such description.\n  - As I stated above, this is a lack of description of the experiment setting; I checked the source code provided in the supplementary materials. Surprisingly, I realized that all the experiments were based on some micro-benchmark on a single transformer layer. (Please correct me if this interpretation is wrong; I am open to discussion, and I can spend more time double-checking the implementation). This makes the experimental results very problematic -- there is no evidence that the IO behavior would be the same when serving a single layer or an end-to-end model. The system should be evaluated for some real workflow instead of this micro-benchmark. \n\n- There is a lack of technique discussion about how this technique can be integrated to parallel inference workflows such as tensor model parallelism or pipeline parallelism."
+      },
+      "questions": {
+        "value": "The essential question I want to raise is about if it is possible to provide some end-to-end evaluation for some real model over some real LLM inference traces?"
+      },
+      "flag_for_ethics_review": {
+        "value": [
+          "No ethics review needed."
+        ],
+        "descriptions": [
+          "No ethics review needed."
+        ]
+      },
+      "rating": {
+        "value": "5: marginally below the acceptance threshold",
+        "description": "5: marginally below the acceptance threshold"
+      },
+      "confidence": {
+        "value": "5: You are absolutely certain about your assessment. You are very familiar with the related work and checked the math/other details carefully.",
+        "description": "5: You are absolutely certain about your assessment. You are very familiar with the related work and checked the math/other details carefully."
+      },
+      "code_of_conduct": {
+        "value": "Yes",
+        "description": "Yes"
+      }
+    },
+    "id": "Ng98n8jJPQ",
+    "forum": "9k27IITeAZ",
+    "replyto": "9k27IITeAZ",
+    "signatures": [
+      "ICLR.cc/2024/Conference/Submission7819/Reviewer_sEJt"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2024/Conference",
+      "ICLR.cc/2024/Conference/Submission7819/Reviewer_sEJt"
+    ],
+    "number": 3,
+    "invitations": [
+      "ICLR.cc/2024/Conference/Submission7819/-/Official_Review",
+      "ICLR.cc/2024/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2024/Conference",
+    "tcdate": 1698732040415,
+    "cdate": 1698732040415,
+    "tmdate": 1699636957213,
+    "mdate": 1699636957213,
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission7819 by Reviewer sEJt",
+    "display_title": "The End-to-end Test",
+    "content": {
+      "title": {
+        "value": "The End-to-end Test"
+      },
+      "comment": {
+        "value": "The concern of lacking end-to-end tests on real-world LLM models is valid and well-received. We failed to provide it in the current version due to the following reasons:\n1. a comparison with existing popular inference solutions, such as vLLM, needs to be done. But these systems all have their highly customized implementations. We need to reach parity on many techniques(noise) unrelated to the optimization covered by this paper, e.g., iteration-based batching, memory offloading, and kernel fusions. Otherwise, the comparison is unfair: where the improvement comes from must be clarified. Is it a result of our optimization or some other techniques? This is also why we only publish micro-kernel level results: they are much less noisy.\n2. we are working on a highly optimized and production-ready version of this paper's solution. More time is needed before publishing comprehensive end-to-end test results. There will be an updated version of this paper after that."
+      }
+    },
+    "id": "uBkYs9NOas",
+    "forum": "9k27IITeAZ",
+    "replyto": "Ng98n8jJPQ",
+    "signatures": [
+      "ICLR.cc/2024/Conference/Submission7819/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2024/Conference",
+      "ICLR.cc/2024/Conference/Submission7819/Authors"
+    ],
+    "number": 2,
+    "invitations": [
+      "ICLR.cc/2024/Conference/Submission7819/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2024/Conference",
+    "tcdate": 1700220921655,
+    "cdate": 1700220921655,
+    "tmdate": 1700220954665,
+    "mdate": 1700220954665,
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to The End-to-end Test",
+    "display_title": "Thank you for your feedback",
+    "content": {
+      "title": {
+        "value": "Thank you for your feedback"
+      },
+      "comment": {
+        "value": "I really appreciate your feedback. Based on the current status (considering the additional information), I have to keep my score."
+      }
+    },
+    "id": "L2N2WazvAN",
+    "forum": "9k27IITeAZ",
+    "replyto": "uBkYs9NOas",
+    "signatures": [
+      "ICLR.cc/2024/Conference/Submission7819/Reviewer_sEJt"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2024/Conference",
+      "ICLR.cc/2024/Conference/Submission7819/Reviewer_sEJt"
+    ],
+    "number": 8,
+    "invitations": [
+      "ICLR.cc/2024/Conference/Submission7819/-/Official_Comment",
+      "ICLR.cc/2024/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2024/Conference",
+    "tcdate": 1701654713299,
+    "cdate": 1701654713299,
+    "tmdate": 1710476846392,
+    "mdate": 1710476846392,
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to ChunkAttention: Efficient Attention on KV Cache with Chunking Sharing and Batching",
+    "display_title": "Official Review of Submission7819 by Reviewer FRg7",
+    "content": {
+      "summary": {
+        "value": "The paper aims to tackle the problem of redundant Key-Value (KV) cache in Large Language Models (LLMs) when shared prompt tokens are used. The proposed solution involves the use of a prefix-tree-based data structure for memory management, which can potentially speed up self-attention algorithms."
+      },
+      "soundness": {
+        "value": "2 fair",
+        "description": "2 fair"
+      },
+      "presentation": {
+        "value": "2 fair",
+        "description": "2 fair"
+      },
+      "contribution": {
+        "value": "2 fair",
+        "description": "2 fair"
+      },
+      "strengths": {
+        "value": "- The paper introduces the concept of using prefix trees for managing KV cache, which is a novel approach in the context of LLMs.\n  \n- The problem of addressing redundant KV cache with shared prompt tokens is both relevant and interesting, particularly as LLMs continue to evolve and find application in various fields."
+      },
+      "weaknesses": {
+        "value": "- The paper lacks support for the need for reducing redundant KV cache through shared prompts. It seems to rely heavily on the assumption that a significant amount of KV cache can be shared, but no data to back this up.\n  \n- The paper, particularly Section 3, is difficult to follow. Complex ideas are not explained well, and the method implementation could be better explained to improve the readability."
+      },
+      "questions": {
+        "value": "- In Section 3.1, the term $n_s$ is used prior to its explanation in later sections, creating a disconnect in the logical flow.\n  \n- The paper does not provide any references or empirical evidence to support the concept of sharable KV cache in the context of prompt engineering. This makes it challenging to gauge the validity and impact of the proposed method.\n  \n- There is insufficient rationale behind the choice of shared prompt tokens in the experiments. The representativeness of these settings is questionable, and more clarity is needed to assess the paper's contributions effectively.\n\nWhile the paper tackles an interesting problem and introduces a novel approach via prefix trees, it has substantial limitations. The primary concerns are the lack of empirical data to support the motivation behind reducing redundant KV cache and the complexity in readability, especially in Section 3. These issues, taken together, place the paper below the acceptance threshold for publication in its current form. Revision and additional supporting data are highly recommended."
+      },
+      "flag_for_ethics_review": {
+        "value": [
+          "No ethics review needed."
+        ],
+        "descriptions": [
+          "No ethics review needed."
+        ]
+      },
+      "rating": {
+        "value": "5: marginally below the acceptance threshold",
+        "description": "5: marginally below the acceptance threshold"
+      },
+      "confidence": {
+        "value": "3: You are fairly confident in your assessment. It is possible that you did not understand some parts of the submission or that you are unfamiliar with some pieces of related work. Math/other details were not carefully checked.",
+        "description": "3: You are fairly confident in your assessment. It is possible that you did not understand some parts of the submission or that you are unfamiliar with some pieces of related work. Math/other details were not carefully checked."
+      },
+      "code_of_conduct": {
+        "value": "Yes",
+        "description": "Yes"
+      }
+    },
+    "id": "7KQFeKeskZ",
+    "forum": "9k27IITeAZ",
+    "replyto": "9k27IITeAZ",
+    "signatures": [
+      "ICLR.cc/2024/Conference/Submission7819/Reviewer_FRg7"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2024/Conference",
+      "ICLR.cc/2024/Conference/Submission7819/Reviewer_FRg7"
+    ],
+    "number": 4,
+    "invitations": [
+      "ICLR.cc/2024/Conference/Submission7819/-/Official_Review",
+      "ICLR.cc/2024/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2024/Conference",
+    "tcdate": 1698786443838,
+    "cdate": 1698786443838,
+    "tmdate": 1699636957090,
+    "mdate": 1699636957090,
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission7819 by Reviewer FRg7",
+    "display_title": "Official Comment by Authors",
+    "content": {
+      "comment": {
+        "value": "1. Use of Unexplained Terms in Section 3.1: We’ll revise the structure in the next version of the paper to make sure terms are clearly defined before they are used to improve coherence.\n\n2. References and Empirical Evidence for Sharable KV Cache: The concept of sharable KV cache is an observation from real-world systems, including internal LLM systems and external chatbot plugin systems such as ChatGPT. We are currently in the process of exploring ways to publish empirical data to support this observation, while ensuring we respect all necessary confidentiality constraints.\n\n3. Rationale Behind Shared Prompt Tokens: The selection of shared prompt tokens in our experiments was made with the intention to cover a broad range of cases observed in prompt systems. These cases can vary widely, with the shared prefix ranging from hundreds to tens of thousands of tokens. In the revised version of our paper, we'll provide a more detailed explanation of our experimental settings to better represent these scenarios."
+      }
+    },
+    "id": "xIp3em12Mi",
+    "forum": "9k27IITeAZ",
+    "replyto": "7KQFeKeskZ",
+    "signatures": [
+      "ICLR.cc/2024/Conference/Submission7819/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2024/Conference",
+      "ICLR.cc/2024/Conference/Submission7819/Authors"
+    ],
+    "number": 3,
+    "invitations": [
+      "ICLR.cc/2024/Conference/Submission7819/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2024/Conference",
+    "tcdate": 1700229919264,
+    "cdate": 1700229919264,
+    "tmdate": 1700229919264,
+    "mdate": 1700229919264,
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission7819 by Reviewer FRg7",
+    "display_title": "[Important] Response Required to Authors' Rebuttal",
+    "content": {
+      "title": {
+        "value": "[Important] Response Required to Authors' Rebuttal"
+      },
+      "comment": {
+        "value": "Dear Reviewer FRg7,\n\nAs we progress through the review process for ICLR 2024, I would like to remind you of the importance of the rebuttal phase. The authors have submitted their rebuttals, and it is now imperative for you to engage in this critical aspect of the review process.\n\nPlease ensure that you read the authors' responses carefully and provide a thoughtful and constructive follow-up. Your feedback is not only essential for the decision-making process but also invaluable for the authors.\n\nThank you,\n\nICLR 2024 Area Chair"
+      }
+    },
+    "id": "gNXFQ0NAXv",
+    "forum": "9k27IITeAZ",
+    "replyto": "7KQFeKeskZ",
+    "signatures": [
+      "ICLR.cc/2024/Conference/Submission7819/Area_Chair_j8fz"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2024/Conference",
+      "ICLR.cc/2024/Conference/Submission7819/Area_Chair_j8fz"
+    ],
+    "number": 6,
+    "invitations": [
+      "ICLR.cc/2024/Conference/Submission7819/-/Official_Comment",
+      "ICLR.cc/2024/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2024/Conference",
+    "tcdate": 1701653694329,
+    "cdate": 1701653694329,
+    "tmdate": 1710476846467,
+    "mdate": 1710476846467,
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission7819 by Reviewer FRg7",
+    "display_title": "Official Comment by Reviewer FRg7",
+    "content": {
+      "comment": {
+        "value": "Thank the authors for the rebuttal. However, I remain my evaluation on this submission. Gathering more information in the public domain about KVCache sharing and experimental settings could help strengthen the paper."
+      }
+    },
+    "id": "vV3PeOtovc",
+    "forum": "9k27IITeAZ",
+    "replyto": "7KQFeKeskZ",
+    "signatures": [
+      "ICLR.cc/2024/Conference/Submission7819/Reviewer_FRg7"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2024/Conference",
+      "ICLR.cc/2024/Conference/Submission7819/Reviewer_FRg7"
+    ],
+    "number": 10,
+    "invitations": [
+      "ICLR.cc/2024/Conference/Submission7819/-/Official_Comment",
+      "ICLR.cc/2024/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2024/Conference",
+    "tcdate": 1701723520662,
+    "cdate": 1701723520662,
+    "tmdate": 1710476846290,
+    "mdate": 1710476846290,
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to ChunkAttention: Efficient Attention on KV Cache with Chunking Sharing and Batching",
+    "display_title": "Meta Review of Submission7819 by Area Chair j8fz",
+    "content": {
+      "metareview": {
+        "value": "The paper in question introduces a novel concept of using prefix trees for managing KV cache in Large Language Models (LLMs), addressing the issue of redundant KV cache with shared prompt tokens. This approach is both relevant and innovative, particularly in the evolving landscape of LLM applications. However, despite the strengths identified by the reviewers, the paper has significant limitations that lead to an inclination towards rejection, with an average score of 4.5.\n\nWhile the paper addresses an interesting problem and proposes a novel method, it falls short in crucial areas such as empirical support, clarity, experimental rigor, and comparative analysis. These shortcomings, combined with practical applicability concerns, place the paper below the threshold for acceptance in its current form."
+      },
+      "justification_for_why_not_higher_score": {
+        "value": "The above-combined factors lead to the conclusion that the paper, in its current state, does not meet the threshold for acceptance at the conference."
+      },
+      "justification_for_why_not_lower_score": {
+        "value": "N/A"
+      }
+    },
+    "id": "pcu2kKppvs",
+    "forum": "9k27IITeAZ",
+    "replyto": "9k27IITeAZ",
+    "signatures": [
+      "ICLR.cc/2024/Conference/Submission7819/Area_Chair_j8fz"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2024/Conference",
+      "ICLR.cc/2024/Conference/Submission7819/Senior_Area_Chairs",
+      "ICLR.cc/2024/Conference/Submission7819/Area_Chair_j8fz"
+    ],
+    "number": 1,
+    "invitations": [
+      "ICLR.cc/2024/Conference/Submission7819/-/Meta_Review",
+      "ICLR.cc/2024/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2024/Conference",
+    "tcdate": 1701865454644,
+    "cdate": 1701865454644,
+    "tmdate": 1708115448120,
+    "mdate": 1708115448120,
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to ChunkAttention: Efficient Attention on KV Cache with Chunking Sharing and Batching",
+    "display_title": "Paper Decision",
+    "content": {
+      "title": {
+        "value": "Paper Decision"
+      },
+      "decision": {
+        "value": "Reject",
+        "description": "Reject"
+      },
+      "comment": {
+        "value": ""
+      }
+    },
+    "id": "3ia8vf9Txu",
+    "forum": "9k27IITeAZ",
+    "replyto": "9k27IITeAZ",
+    "signatures": [
+      "ICLR.cc/2024/Conference/Program_Chairs"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2024/Conference",
+      "ICLR.cc/2024/Conference/Program_Chairs"
+    ],
+    "number": 1,
+    "invitations": [
+      "ICLR.cc/2024/Conference/Submission7819/-/Decision",
+      "ICLR.cc/2024/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2024/Conference",
+    "tcdate": 1705406112978,
+    "cdate": 1705406112978,
+    "tmdate": 1708116145833,
+    "mdate": 1708116145833,
+    "license": "CC BY 4.0",
+    "version": 2
+  }
+]
