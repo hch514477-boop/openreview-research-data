@@ -51,7 +51,7 @@ class Coordinator:
         self.log_lock=threading.Lock()
         self.cache_lock=threading.RLock()
         self.disk_lock=threading.Lock()
-        self.binary_slots=threading.BoundedSemaphore(2)
+        self.binary_slots=threading.BoundedSemaphore(getattr(root,'binary_workers',2))
         self.form_attempts={}
         self.failure=None
         self.arxiv_next=root.last+3 if root.last else 0

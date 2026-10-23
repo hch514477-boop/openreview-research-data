@@ -13,6 +13,34 @@ from src.common import load,save
 PDF=b'%PDF-1.4\nfixture\n%%EOF'
 
 
+def test_v1_attachments_use_sdk_without_hash_path_request(tmp_path):
+    folder,paper,notes,meta,api=fixture(tmp_path,version=1)
+    original=api.request
+    zipped=original('/attachment/supp.zip',{},binary=True)
+    api.calls.clear()
+    api.api_version=1
+    lookups=[]
+    def lookup(id,field_name):
+        lookups.append((id,field_name))
+        return zipped if field_name=='supplementary_material' else PDF
+    api.client=SimpleNamespace(get_attachment=lookup)
+    api.initialize=lambda:None
+    def request(path,params,binary=False):
+        assert not path.startswith('/attachment/'), 'v1 must use SDK directly'
+        return original(path,params,binary)
+    api.request=request
+    result=a.supplement(api,folder,paper,notes,meta)
+    assert result['status']=='success'
+    assert lookups==[('paper','supplementary_material'),('review','file')]
+    record=next(t for t in load(folder/'resources.json').values() if t['field']=='supplementary_material')
+    assert record['source_binding_verified'] is False
+    assert 'original_path_error' not in record
+    a.supplement(api,folder,paper,notes,load(folder/'metadata.json'))
+    assert len(lookups)==2
+    record=next(t for t in load(folder/'resources.json').values() if t['field']=='supplementary_material')
+    assert record['source_binding_verified'] is False
+
+
 def fixture(tmp_path,version=2):
     folder=tmp_path/'raw/ICLR_2024/paper'
     paper=dict(id='paper',forum='paper',readers=['everyone'],tcdate=1,
