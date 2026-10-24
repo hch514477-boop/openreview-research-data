@@ -1,0 +1,662 @@
+[
+  {
+    "content": {
+      "summary": {
+        "value": "The paper revolves around the contradiction in MoE routing (TER) within LVLMs between “load balancing preferring uniform distribution” and “inconsistency in modality distributions.” Through multiple experiments and visualizations, the authors observe that the TER probability variance distribution for language tokens is closer to uniform, whereas for visual tokens it exhibits a clear long-tail pattern. Under these conditions, enforcing load balancing on visual tokens disrupts the specialization of the “tail” visual tokens that are rare yet critical. Based on this, the authors propose LTDR, which includes MsDaR, applying different balancing constraints to language and vision, and VsDEA, which uses routing probability variance (RPV) to identify “tail” visual tokens online and activate more experts for them.\n\nThe core idea is to retain load balancing only on the language side and remove it for the visual side to increase RPV; a dynamic threshold is used to route tail tokens to Top-$a$ experts instead of Top-$k$. The authors validate this on MoE-LLaVA, Molmo, and GMoE, achieving average gains of about +1.2%, +2.0%, and +1.0%, respectively, and provide ablations, routing comparisons, runtime and memory statistics, and visualization analyses. It should be noted that the conclusion “language nearly uniform, vision long-tailed” is primarily supported by the examples and visualizations in the paper, and its applicability still depends on the model and router setup; it cannot yet be regarded as a cross-architecture law."
+      },
+      "soundness": {
+        "value": 3
+      },
+      "presentation": {
+        "value": 3
+      },
+      "contribution": {
+        "value": 3
+      },
+      "strengths": {
+        "value": "The problem setup is practice-oriented: when the MoE balancing term favors “uniformity” but visual tokens are “long-tailed,” rare yet key information can indeed be diluted. LTDR’s two modifications are both minimal: MsDaR merely limits the balancing term to language sequences, and VsDEA activates more experts for a small number of high-RPV visual tokens without altering sequence length—effectively an “oversampling-like” opportunity expansion. The authors provide extensive comparisons, ablations, and cost analyses, including runtime, memory, expert load distribution, and random-seed intervals, making the method reproducible and practically valuable."
+      },
+      "weaknesses": {
+        "value": "The “language near-uniform, vision long-tailed” characterization currently depends on the chosen models and visual tokenizer (Appendix D.2 notes 576 CLIP tokens per image) as well as specific router/Top-k settings. Although extensive experiments are conducted on MoE-LLaVA, Molmo, and GMoE, it remains unclear whether this distribution pattern holds when changing router types (e.g., dynamic expert counts, segmented softmax, top-1 vs top-2), expert scales and layers, or visual tokenizers. A systematic validation is lacking. I suggest adding cross-router/backbone RPV distribution comparisons and variance analyses to avoid over-generalizing empirical observations.\n\nMoreover, the implementation of VsDEA Top-a is somewhat heuristic: Eq. (12) does not specify whether weights are renormalized or if temperature/thresholding is used to suppress noise from low-probability experts; inference-time latency and all-to-all waiting for a=12 versus k=8 on Molmo are not quantified (only MoE-LLaVA reports timing). In addition, slight degradation appears on the POPE Adversarial subset, suggesting that “activating more experts for tail tokens” may introduce bias toward overconfidence on adversarial negatives—this deserves further analysis and mitigation."
+      },
+      "questions": {
+        "value": "I would especially like the authors to perform a “strategy-swap” ablation: remove load balancing on the language side while keeping it on the vision side, and examine the corresponding MsDaR and VsDEA variants. Observing whether de-balancing language routing harms its originally uniform distribution or introduces expert bias in instruction-alignment tasks would directly support (or challenge) the claim that “modality-specific strategies are necessary.” Conversely, if performance improves after swapping, it would significantly refine the boundary conditions of the conclusion.\n\nAdditionally, I hope to see two implementation and measurement clarifications:\n\nDetails on normalization, clipping, and temperature settings in Top-a, and their impact on gradients and communication costs.\n\nBroader RPV distribution and performance comparisons across routers/backbones, especially including dynamic routing and top-1 gating.\n\nFinally, regarding POPE Adversarial degradation, could VsDEA incorporate confidence- or consistency-based gating, or be combined with methods like STGC (gradient conflict mitigation) to suppress overconfidence when seeing partial visual evidence? Addressing these points could further raise my overall evaluation."
+      },
+      "flag_for_ethics_review": {
+        "value": [
+          "No ethics review needed."
+        ]
+      },
+      "rating": {
+        "value": 6
+      },
+      "confidence": {
+        "value": 3
+      },
+      "code_of_conduct": {
+        "value": "Yes"
+      }
+    },
+    "id": "7NMYQs4XMp",
+    "forum": "Ommc0WBraJ",
+    "replyto": "Ommc0WBraJ",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission13490/Reviewer_ZRpW"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission13490/Reviewer_ZRpW"
+    ],
+    "number": 4,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission13490/-/Official_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1761977545867,
+    "cdate": 1761977545867,
+    "tmdate": 1762924106873,
+    "mdate": 1762924106873,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "summary": {
+        "value": "The paper proposes LTDR, a long-tailed distribution-aware router for MoE-based LVLMs. It observes that language tokens exhibit near-uniform token-expert routing (TER), whereas vision tokens are long-tailed; standard load balancing thus misaligns with vision TER and can hinder expert specialization. LTDR consists of:\n(i) MsDaR — retain load balancing for language but remove it for vision, increasing routing probability variance (RPV) and specialization.\n(ii) VsDEA — identify high-RPV vision “tail” tokens and activate more experts (k→a) for them. Experiments show consistent gains across LVLMs and vision-only tasks with no significant increase in inference time."
+      },
+      "soundness": {
+        "value": 3
+      },
+      "presentation": {
+        "value": 3
+      },
+      "contribution": {
+        "value": 3
+      },
+      "strengths": {
+        "value": "1.\tSimple, compatible design: MsDaR only alters the balancing objective by modality; VsDEA uses a mean-RPV threshold and k→a activation. Easy to integrate into existing MoE stacks.\n2.\tBroad, consistent improvements: Steady gains across MoE-LLaVA and Molmo; vision-only GMoE also benefits (e.g., ~+1.0% Avg).\n3.\tLatency and efficiency: Inference time remains essentially unchanged; the all-to-all bottleneck explanation is plausible and supported by expert-load analysis."
+      },
+      "weaknesses": {
+        "value": "1. The paper describes visual tokens as \"long-tailed\" based on RPV histograms (Figure 1(b)), but lacks statistical tests (e.g., tail index, power-law fitting) to rigorously support this claim.\nRPV is influenced by router parameters (gate temperature, regularization), so its \"tail\" may not reflect semantic or information-based long-tailedness.\n\n2. The choice of base models is narrow, limiting generalizability. Descriptions like \"Qwen-1.8B\" are too vague; specific model details are needed.\n\n3. No comparison with simpler methods (e.g., temperature/entropy scaling) to sharpen visual token routing, which could also increase RPV without disabling load balancing.\n\n4. The mean-RPV threshold (Equation 11) lacks ablation studies (e.g., generalizability across datasets/models). Only fixed proportion thresholds (10/15/20%) are tested (Appendix B.5), with no deeper sensitivity analysis.\n\n5. MsDaR removes load balancing for visual tokens (Equation 10), but risks like expert overloading or training instability under large-scale K (e.g., 64) or extreme data distributions are not quantified.\n\n6. Main results show small improvements (+0.4 to +1.2, Table 1), but significance tests are only in Appendix C.2 (Table 18).\nConfidence intervals and variance should be included in the main text.\n\n7. The impact of reducing (not removing) load balancing or adding constraints (e.g., temperature/entropy) is not studied.\nHow do methods like temperature annealing or entropy regularization compare to VsDEA?\n\n8. The link between RPV and token informativeness relies on visualizations/ablations; stronger statistical or interpretability evidence is needed.\n\n9.  VsDEA’s choice of activated experts (a) is empirical; systematic tuning or adaptive policies would improve credibility.\n\n10. Benefits under near-uniform token distributions are unclear; synthetic studies could help define boundary conditions.\n\n11. Batch-wise mean-RPV thresholds may misclassify non-critical patches as \"tails,\" diverting experts from important regions. A learnable joint mechanism is suggested."
+      },
+      "questions": {
+        "value": "1.\tRPV ↔ informativeness: Can you quantify correlation between high-RPV vision tokens and downstream performance or gradient-based relevance (e.g., leave-one-token-out, attribution metrics)?\n2.\tAdaptive a: Could a be chosen via RPV quantiles or a compute-budgeted policy? Any results across different K/k?\n3.\tTraining stability: Does removing vision load balancing cause early expert skew or collapse? Is entropy regularization or warm-up needed?"
+      },
+      "flag_for_ethics_review": {
+        "value": [
+          "No ethics review needed."
+        ]
+      },
+      "rating": {
+        "value": 4
+      },
+      "confidence": {
+        "value": 3
+      },
+      "code_of_conduct": {
+        "value": "Yes"
+      }
+    },
+    "id": "AvseSanXpa",
+    "forum": "Ommc0WBraJ",
+    "replyto": "Ommc0WBraJ",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission13490/Reviewer_VYrS"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission13490/Reviewer_VYrS"
+    ],
+    "number": 3,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission13490/-/Official_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1761964808545,
+    "cdate": 1761964808545,
+    "tmdate": 1762924107342,
+    "mdate": 1762924107342,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "title": {
+        "value": "Paper Decision"
+      },
+      "decision": {
+        "value": "Reject"
+      },
+      "comment": {
+        "value": ""
+      }
+    },
+    "id": "ChqCB7tNtF",
+    "forum": "Ommc0WBraJ",
+    "replyto": "Ommc0WBraJ",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Program_Chairs"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Program_Chairs"
+    ],
+    "number": 1,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission13490/-/Decision",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1769417050835,
+    "cdate": 1769417050835,
+    "tmdate": 1770353967264,
+    "mdate": 1770353967264,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Decision",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "title": {
+        "value": "List of Revisions"
+      },
+      "comment": {
+        "value": "We sincerely appreciate your thoughtful and constructive feedback. We attach great importance to every comment and suggestion. According to the reviewers' suggestions, we have submitted a revised version of the paper. The main revisions are as follows:\n\n-In **Eq.12**, we have refined the ***Renormalization Procedure*** to address the concerns of implementation details raised by ZRpW.\n\n-In **Section 4.5**, we have moved ***Confidence Intervals and Variance*** to the main text in response to the suggestion raised by VYrS.\n\n-In **Appendix D.2**, we have provided ***Training Stages RPV***, ***Cross-router RPV***, and ***Cross-backbone RPV*** to address the concerns of distribution comparisons raised by ZRpW, VYrS and Cafp.\n\n-In **Appendix F.1**, we have provided ***Molmo Inference-time Latency*** to address the concerns of latency raised by ZRpW and VYrS.\n\n-In **Appendix F.2**, we have provided ***Ablation on Vision and Language*** to address the concerns of strategy-swap ablation raised by ZRpW and eGjB.\n\n-In **Appendix F.3**, we have provided ***Cross-router Performance*** to address the concerns of cross-router performance raised by ZRpW.\n\n-In **Appendix F.4**, we have provided ***Comparison with Simpler Sharpening Vision Token Routing Methods*** to address the concerns of routing comparisons raised by VYrS.\n\n-In **Appendix F.5**, we have provided ***Generalizability across Models*** and ***Comparison with Tuning Policy*** to address the concerns of generalizability and tuning comparison raised by VYrS.\n\n-In **Appendix F.6**, we have provided ***Impact of Reducing Load Balancing*** to address the concerns of reducing balancing comparison raised by VYrS.\n\n-In **Appendix F.7**, we have provided ***The Link between RPV and Token Informativeness*** to address the concerns of statistical evidenc raised by VYrS.\n\n-In **Appendix F.8**, we have provided ***Average Top-k, Activated Parameters and Performance during Inference*** to address the concerns of activated parameters raised by eGjB.\n\n-In **Appendix F.9**, we have provided ***Scalability to Higher Vision-token Scenarios*** to address the concerns of scenario scalability raised by eGjB.\n\n-In **Appendix F.10**, we have provided ***Experimental Scale and Generalization*** to address the concerns of datset generalization raised by Cafp."
+      }
+    },
+    "id": "D3qPHXPRkp",
+    "forum": "Ommc0WBraJ",
+    "replyto": "Ommc0WBraJ",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission13490/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission13490/Authors"
+    ],
+    "number": 8,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission13490/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764847293035,
+    "cdate": 1764847293035,
+    "tmdate": 1764848142236,
+    "mdate": 1764848142236,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "title": {
+        "value": "Response to Reviewer eGjB"
+      },
+      "comment": {
+        "value": "We sincerely thank reviewer **eGjB** for the thoughtful and constructive feedback, which will help improve our work. Our responses are as follows.\n\n> W1: How to achieve efficient all-to-all communication in dynamic setting.\n\n***Response:*** Our primary focus is not on achieving efficient all-to-all communication, but on explaining why removing vision load balancing and activating additional experts for vision tail tokens results in minimal latency overhead. As described in ***Appendix B.1 Line 920-940***, this efficiency stems from MoE's all-to-all communication mechanism, where inference speed is constrained by the slowest expert (i.e., the expert processing the largest number of tokens). To validate this, we compare the expert load of MoE-LLaVA and our method on MME. The results show that our method increases the expert activation rate without significantly raising the load of the slowest expert, and even reduces it compared to the baseline, thereby improving inference efficiency.\n\n> W2: The key technical innovations of LTDR, and how it meaningfully advances beyond existing MoE or routing strategies in multimodal settings?\n\n***Response:*** The key technical innovations of LTDR are its modality-specific, distribution-aware routing and its vision-specific dynamic expert activation. Together, these modules advance existing MoE architectures by increasing the routing probability variance of vision tokens—particularly vision tail tokens—enabling them to be processed by more specialized experts. In addition, increasing the number of activated experts for important vision tail tokens improves fault tolerance during specialized expert selection.\n\n> W3: Attribution of performance gains.\n\n***Response:*** First, as shown in ***Main 4.3 Line 370-402 and Appendix C.2 Line 1097-1110***, our improved routing strategy alone improves performance, even without additional parameters. To further investigate, we conduct an ablation by swapping routing strategies—retaining load balancing for vision tokens while removing it for language tokens. Results in the first table below indicate that arbitrarily removing load balancing does not produce meaningful gains. Second, we also examine whether simply increasing parameters enhances performance. Adding more experts on the language side under the swapped routing setup does not affect performance, and increasing the number of activated experts for vision tail tokens to three yields no significant improvement. These findings confirm that indiscriminately increasing expert activation does not guarantee better performance and can even be detrimental. The detailed configurations for expert activation and parameter counts are provided in the second table below.  In summary, our improvements stem from two key factors: 1) Modality-specific distribution-aware routing, which allows experts to specialize according to each modality's distribution, therefore enables vision tail tokens to be processed by specialized experts. 2) Vision-specific dynamic expert activation, which enhances fault tolerance in expert selection for vision tail tokens.\n\n**Table1: Strategy-swap Ablation on Vision and Language**\n| MoE-LLaVA_StableLM | GQA | ScienceQA | TextVQA | POPE | MME | MMBench | MM-Vet | Avg |\n|--------------------|-----|-----------|---------|------|-----|---------|--------|-----|\n| Vanilla | 60.3 | 62.6 | 50.1 | 85.7 | 1318.2 | 60.2 | 26.9 | 57.6 |\n| Language |\n| + MsDaR | 60.8 | 62.0 | 50.2 | 85.9 | 1254.1 | 60.0 | 28.0 | 57.8 |\n| + MsDaR&TsDEA(a=4) | 60.1 | 61.2 | 50.4 | 86.2 | 1282.4 | 60.1 | 28.6 | 57.8 |\n| Vision |\n| + MsDaR | 61.1 | 62.3 | 51.2 | 86.6 | 1324.3 | 59.9 | 27.9 | 58.2 |\n| + MsDaR&VsDEA(a=3) | 60.7 | 62.6 | 50.8 | 86.4 | 1345.7 | 60.4 | 27.3 | 58.0 |\n| + MsDaR&VsDEA(a=4) | 61.1 | 63.4 | 51.1 | 86.6 | 1363.5 | 60.6 | 29.9 | 58.8 |\n\n**Table2: Average Top-k, Activated Parameters and Performance during Inference**\n\n| MoE-LLaVA_StableLM | Top-k | Activated Parameters (Billions) | Average Performance |\n|--------------------|-------|---------------------------------|-----------|\n| Vanilla | 2 | 4.9 | 57.6 |\n| LTDR | 2.26 | 5.2 | 58.8 |\n\n> W4: Scalability to higher vision-token scenarios.\n\n***Response:*** Due to time constraints, we evaluate inference performance on a multi-image visual question answering task, comparing our method with the baseline in terms of both accuracy and inference speed. Specifically, we use the NLVR2 dataset, where each sample consists of two images and a textual statement. The model must determine whether the statement correctly describes the content of both images. Experimental results, presented in the table below, show that our method outperforms the baseline by +1.5% in scenarios involving a higher number of vision tokens, while maintaining nearly identical inference time and introducing no significant latency overhead.\n\n**Table: Scalability on NLVR2**\n| MoE-LLaVA-StableLM | NLVR2 | Inference Time (s) |\n|-|-|-|\n| Vanilla | 52.9 | 1121 |\n| LTDR | 54.4 | 1124 |"
+      }
+    },
+    "id": "EXjGhqb0FE",
+    "forum": "Ommc0WBraJ",
+    "replyto": "MrA3tCpz3i",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission13490/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission13490/Authors"
+    ],
+    "number": 3,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission13490/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764180170300,
+    "cdate": 1764180170300,
+    "tmdate": 1764846940023,
+    "mdate": 1764846940023,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "title": {
+        "value": "Response to Reviewer VYrS (1/3)"
+      },
+      "comment": {
+        "value": "We sincerely thank reviewer **VYrS** for the thoughtful and constructive feedback, which will help improve our work. Our responses are as follows.\n\n> W1: Lacking statistical tests to support \"visual tokens are long-tailed\".\n\n***Response:*** Under fixed router parameters (gate temperature and regularization), we compare the vision token RPV distributions across different routers and backbones (***Appendix D.2 Line 1234-1241***). These distributions exhibit a clear long-tailed pattern: they are highly asymmetric, with the majority of probabilities concentrated in the head region, while the remaining probabilities form an extended tail where sample frequency decreases sharply toward higher values.\n\n> W2: The choice of base models is narrow, and specific model details are needed.\n\n***Response:*** We select two representative vision-language MoE models: MoE-LLaVA, the earliest open-source and widely studied model with three different backbones in this category, and Molmo, the most recent state-of-the-art vision-language MoE model (***Main 4.2 Lines 319–323***). In addition, we evaluate the generalization of our method on the visual MoE model GMoE (***Main 4.2 Lines 365–368***). All these models differ in scale and architecture. For Qwen-1.8B, we extend the Qwen-1.8B language model by integrating a visual projection module (CLIP) and replicating the MLP parameters in the transformer layers to construct multiple experts with identical initialization.\n\n> W3: No comparison with simpler methods to sharpen vision token routing.\n\n***Response:*** To test the sharpening of vision token routing, we compare our method with several simpler routing strategies, including temperature scaling, entropy regularization, and heuristic sharpening. The results are summarized in the table below. Temperature-based: Gumbel-Softmax with a temperature of 0.7. Entropy-based: Standard entropy regularization to encourage more confident routing. Heuristic-based: Constraint on the variance of vision token routing. Simply sharpening vision token routing does not yield significant improvements. We hypothesize that this is due to the distinct routing behaviors of head and tail vision tokens: tail tokens are relatively few, so increasing vision token routing can help them reach specific experts more effectively; in contrast, head tokens are abundant and sufficiently learn from various experts, so increasing vision token routing may actually hinder the learning of tail tokens.\n\n**Table: Comparison with Simpler Sharpening Vision Token Routing Methods**\n| MoE-LLaVA-StableLM | GQA | ScienceQA | TextVQA | POPE | MME | MMBench | MM-Vet | Avg |\n|--------------------|-----|-----------|---------|------|-----|---------|--------|-----|\n| Vanilla | 60.3 | 62.6 | 50.1 | 85.7 | 1318.2 | 60.2 | 26.9 | 57.6 |\n| Temperature-based | 60.9 | 62.8 | 50.2 | 86.0 | 1302.5 | 60.1 | 26.8 | 57.8 |\n| Entropy-based | 61.1 | 62.4 | 50.8 | 86.2 | 1330.7 | 60.0 | 27.2 | 57.9 |\n| Heuristic-based | 61.1 | 62.5 | 50.3 | 85.8 | 1299.6 | 60.2 | 26.6 | 57.7 |\n| LTDR | 61.1 | 63.4 | 51.1 | 86.6 | 1363.5 | 60.6 | 29.9 | 58.8 |\n\n> W4: The mean-RPV threshold lacks ablation studies (e.g., generalizability across datasets/models).\n\n***Response:*** We compare the mean RPV using thresholds of 10%, 15%, and 20%, as the observed mean RPV (13%) lies between these values. This allows us to visually assess how small variations in the threshold affect performance. We have evaluated these fixed-proportion thresholds on the MoE-LLaVA with StableLM-1.6B model across multiple test datasets in ***Appendix B.5 Line 1064-1079***. Here, we further present generalizability experiments on the MoE-LLaVA with Phi-2-2.7B model. The results in the table below also show that mean-RPV has a consistent advantage over the comparison threshold. We also compare mean-RPV with the learnable strategy presented in ***W9***; however, the tuning method yields performance that falls between that of the original model and the LTDR-based model.\n\n**Table: Generalizability across Different Models**\n| Model | GQA | ScienceQA | TextVQA | POPE | MME | MMBench | MM-Vet | Avg |\n|-------|-----|-----------|---------|------|-----|---------|--------|-----|\n| Phi-2 with 10% | 62.1 | 68.3 | 51.6 | 86.5 | 1406.3 | 65.6 | 33.7 | 61.3 |\n| Phi-2 with 15% | 62.0 | 68.4 | 51.8 | 86.6 | 1423.1 | 66.3 | 34.0 | 61.5 |\n| Phi-2 with 20% | 61.3 | 67.8 | 51.3 | 86.2 | 1414.5 | 66.5 | 34.1 | 61.2 |\n| Phi-2 with mean-RPV | 62.2 | 68.5 | 52.0 | 86.7 | 1440.8 | 66.7 | 34.0 | 61.7 |"
+      }
+    },
+    "id": "I9gYsM6qtj",
+    "forum": "Ommc0WBraJ",
+    "replyto": "AvseSanXpa",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission13490/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission13490/Authors"
+    ],
+    "number": 5,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission13490/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764181147693,
+    "cdate": 1764181147693,
+    "tmdate": 1764846823174,
+    "mdate": 1764846823174,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "summary": {
+        "value": "This paper proposes LTDR, which (1) eliminates load balancing for vision tokens and (2) assigns more experts to tail vision tokens. Experimental results demonstrate consistent performance improvements on both vision and vision-language tasks."
+      },
+      "soundness": {
+        "value": 2
+      },
+      "presentation": {
+        "value": 3
+      },
+      "contribution": {
+        "value": 2
+      },
+      "strengths": {
+        "value": "1. The motivation is clear, and the paper is easy to follow.\n2. Numerical results show performance gain compare to baselines."
+      },
+      "weaknesses": {
+        "value": "1. **Efficiency and All-to-All Communication Implementation**:  \n   The paper claims an efficient implementation of all-to-all communication. However, since different tokens may activate a varying number of experts under LTDR, standard efficient MoE frameworks (e.g., Deepspeed and Tutel)—which typically assume uniform expert activation—may not apply directly. Could the authors clarify how they achieve efficient all-to-all communication in this dynamic setting? Additionally, why is LTDR more computationally efficient than MoE-LLaVA despite activating more experts for tail vision tokens?\n\n2. **Technical Novelty**:  \n   The core modifications—removing the load-balancing loss and increasing the number of experts for tail vision tokens—appear relatively straightforward. Could the authors elaborate on what they consider the key technical innovations of LTDR, and how it meaningfully advances beyond existing MoE or routing strategies in multimodal settings?\n\n3. **Attribution of Performance Gains**:  \n   It is unclear whether the observed performance improvements stem primarily from increased model capacity (i.e., more activated parameters due to higher expert activation) rather than improved routing or representation learning. To better understand this, could the authors report the average top-K value per token and the total number of activated parameters during inference for both LTDR and baseline models?\n\n4. **Scalability to High Vision-Token Scenarios**:  \n   In tasks such as video understanding, the number of vision tokens can vastly exceed that of text tokens. How does LTDR scale in such high-token regimes? Does the method incur significant computational or memory overhead, and have the authors evaluated its performance or efficiency on long-sequence or dense vision tasks?"
+      },
+      "questions": {
+        "value": "See above"
+      },
+      "flag_for_ethics_review": {
+        "value": [
+          "No ethics review needed."
+        ]
+      },
+      "rating": {
+        "value": 4
+      },
+      "confidence": {
+        "value": 4
+      },
+      "code_of_conduct": {
+        "value": "Yes"
+      }
+    },
+    "id": "MrA3tCpz3i",
+    "forum": "Ommc0WBraJ",
+    "replyto": "Ommc0WBraJ",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission13490/Reviewer_eGjB"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission13490/Reviewer_eGjB"
+    ],
+    "number": 2,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission13490/-/Official_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1761652225291,
+    "cdate": 1761652225291,
+    "tmdate": 1762924107928,
+    "mdate": 1762924107928,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "summary": {
+        "value": "The authors introduce the Long-Tailed Distribution-aware Router (LTDR), a MoE routing strategy specifically designed for LVLMs. The core premise is that the standard MoE load balancing loss conflicts with the inherent long-tailed distribution of visual tokens, hindering expert specialization on salient, high-information (tailed) tokens. LTDR addresses this via two strategies: Modality-specific Distribution-aware Router (MsDaR), which removes the load balancing loss for visual tokens to increase their Routing Probability Variance (RPV), and Vision-specific Dynamic Expert Activation (VsDEA), which increases the active expert count ($k$) for tokens identified as high-RPV vision tail tokens."
+      },
+      "soundness": {
+        "value": 3
+      },
+      "presentation": {
+        "value": 3
+      },
+      "contribution": {
+        "value": 2
+      },
+      "strengths": {
+        "value": "1.  **Novel Modality-Specific Motivation:** The paper provides a well-motivated critique of standard MoE routing in LVLMs by highlighting the distributional mismatch between visual (long-tailed) and language (more uniform) tokens. This modality-aware design is a novel and important direction for MoE in multimodal settings.\n\n2.  **Intuitive Two-Part Mechanism:** The proposed solution is architecturally clean, addressing both the specialization aspect (MsDaR via RPV maximization) and the learning sufficiency aspect (VsDEA via dynamic $k$) for critical tail tokens.\n\n3.  **Clarity of Presentation:** The methodology is clearly presented with corresponding graphs and mathematical formulations."
+      },
+      "weaknesses": {
+        "value": "1.  **Risk of Expert Collapse and Learning Stability of MsDaR:**\nThe removal of the explicit load balancing loss for visual tokens, aimed at increasing RPV, inherently introduces the risk of expert collapse, where a few experts become severely over-specialized and overloaded, undermining the fundamental purpose of MoE (distributed computation and diverse learning).\n\n2.  **The Effectiveness of the Core Motivation:**\nThe empirical gains shown in Table 1 appear marginal, especially in smaller settings (e.g., Q-1.8B), leading to my concern of its effectiveness. Empirically, with sufficient training, standard MoE experts might naturally learn to differentiate between high-information foreground tokens (tail) and low-information background tokens (head), spontaneously increasing the RPV for critical tokens.\n\n3.  **Experimental Scale and Generalization:**\nThe entire evaluation is limited to a single configuration using the LLaVA + ShareGPT dataset. MoE architectures typically realize their full benefits and stability when validated on llarge-scale pretraining or instruction-tuning datasets.\n\n4.  **Suggestion for Future Work:**\nWhile understandable for baseline comparison, the use of older encoders and LLMs limits the paper's immediate relevance and impact. For future work, it is strongly suggested that the method be migrated and validated using state-of-the-art vision encoders and LLMs (e.g., Siglip2 and Qwen2.5 series) to showcase the method's potential in competitive settings."
+      },
+      "questions": {
+        "value": "1. The authors should provide a discussion and empirical evidence (e.g., expert load statistics or variance analysis over training) demonstrating the robustness of the MoE structure (vision parts) without the visual balancing loss. How is the expert load distribution maintained, and what implicit constraints prevent catastrophic expert dependency?\n\n2. The authors should provide a direct comparison of the RPV distribution for visual tokens between a standard MoE baseline and LTDR at different training stages to demonstrate that the baseline fails to achieve the desired specialization, or that LTDR significantly accelerates this process. Marginal performance gains fail to justify the mechanical effectiveness.\n\n3. The authors should demonstrate the scalability and generalization ability of LTDR by evaluating its performance and stability across larger-scale pretraining or SFT datasets to ensure the method holds value as a general MoE strategy."
+      },
+      "flag_for_ethics_review": {
+        "value": [
+          "No ethics review needed."
+        ]
+      },
+      "rating": {
+        "value": 6
+      },
+      "confidence": {
+        "value": 4
+      },
+      "code_of_conduct": {
+        "value": "Yes"
+      }
+    },
+    "id": "NF1L6zVtf3",
+    "forum": "Ommc0WBraJ",
+    "replyto": "Ommc0WBraJ",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission13490/Reviewer_Cafp"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission13490/Reviewer_Cafp"
+    ],
+    "number": 1,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission13490/-/Official_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1760930311557,
+    "cdate": 1760930311557,
+    "tmdate": 1762924108430,
+    "mdate": 1762924108430,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "title": {
+        "value": "Response to Reviewer Cafp"
+      },
+      "comment": {
+        "value": "We sincerely thank reviewer **Cafp** for the thoughtful and constructive feedback, which will help improve our work. Our responses are as follows.\n\n> W1: Risk of expert collapse and learning stability of MsDaR.\n\n***Response:*** As shown in ***Appendix B.1 Line 920-940 and D.1 Line 1114-1126***, removing vision load balancing does not cause significantly expert collapse compared to the baseline. In some layers, without vision load balancing even results in a reduced and more evenly distributed expert load. We attribute this to the long-tailed distribution of vision tokens. As discussed in ***Main 3.2 Line 253-254***, the abundant vision head tokens are sufficiently diverse to be distributed across experts, resulting in relatively uniform expert utilization and preventing severe expert collapse. Vision tail tokens account for only about 13% of the total and retain a reasonable probability of being routed to different experts. Therefore, catastrophic expert collapse and learning instability are not significant.\n\n> W2: The effectiveness of the core motivation.\n\n***Response:*** While performance gains on Qwen-1.8B are modest, our method yields substantial improvements on StableLM-1.6B and achieves notable results on the recent vision-language MoE model, Molmo. This demonstrates the broad applicability of our approach across both large and small models. Even with sufficient training, standard MoE can distinguish between vision head and tail tokens. However, the relative scarcity of vision tail tokens, coupled with the constraints of the load-balancing mechanism, often prevents standard MoE from effectively learning these underrepresented features. As shown in ***W3***, even when the training data is nearly doubled, standard MoE still fails to separate vision foreground and background tokens as effectively as our method, thereby limiting its capacity for targeted learning.\n\n> W3: Experimental Scale and Generalization.\n\n***Response:*** We conduct experiments using an expanded training dataset to provide a more intuitive comparison. Specifically, we incorporate the Open-LLaVA-NeXT training set, which adds 350K samples to the original 665K samples. Results, summarized in the table below, demonstrate that our method remains effective at larger data scales and outperforms the baseline on the full 1,021K dataset. Furthermore, the improvement in LTDR is further amplified, from 1.2% (665K) to 2.0% (1021K).\n\n**Table: Validation on Large-Scale Instruction-tuning Datasets**\n| MoE-LLaVA_StableLM | Data | GQA | ScienceQA | TextVQA | POPE | MME | MMBench | MM-Vet | Avg |\n|--------------------|------|-----|-----------|---------|------|-----|---------|--------|-----|\n| Vanilla | 665K | 60.3 | 62.6 | 50.1 | 85.7 | 1318.2 | 60.2 | 26.9 | 57.6 |\n| LTDR | 665K | 61.1 | 63.4 | 51.1 | 86.6 | 1363.5 | 60.6 | 29.9 | 58.8 |\n| Vanilla | 1021K | 61.0 | 63.0 | 51.2 | 86.7 | 1360.3 | 61.0 | 29.2 | 58.6 |\n| LTDR | 1021K | 61.4 | 65.4 | 52.5 | 87.3 | 1409.2 | 62.4 | 34.8 | 60.6 |\n\n> W4: Suggestion for future work.\n\n***Response:*** We acknowledge the suggestion regarding the choice of encoders and LLMs, and plan to investigate more recent visual encoders and LLMs to further validate our method and explore its potential across diverse architectural foundations.\n\n> Q1: What implicit constraints prevent catastrophic expert dependency.\n\n***Response:*** We attribute the implicit constraint that prevents catastrophic expert dependency to the long-tailed distribution of vision tokens. Please refer to ***W1*** for details.\n\n> Q2: RPV distribution at different training stages.\n\n***Response:*** We provide updated visualizations of training progression in ***Appendix D.2 Line 1230-1233***, showing the RPV distribution at 1,500, 3,000, and 4,500 steps on TextVQA. The results indicate that, although both the baseline and our method improve mean RPV during training, our approach achieves substantially greater enhancement. This suggests that the baseline has limited capacity to effectively capture critical visual information.\n\n> Q3: The scalability and generalization ability of LTDR.\n\n***Response:*** We demonstrate the scalability and generalization ability of LTDR by evaluating its performance and stability across the larger-scale SFT datasets to ensure the method holds value as a general MoE strategy. Please refer to ***W3*** for details."
+      }
+    },
+    "id": "R4Anz3oEEm",
+    "forum": "Ommc0WBraJ",
+    "replyto": "NF1L6zVtf3",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission13490/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission13490/Authors"
+    ],
+    "number": 4,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission13490/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764180424192,
+    "cdate": 1764180424192,
+    "tmdate": 1764846985474,
+    "mdate": 1764846985474,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "summary": {
+        "value": "The paper makes an interesting obersvations, in MOE-based models, language tokens exhibit near-uniform token-to-expert routing (TER), whilst vision tokens follow a long-tailed distribution instead. Therefore, standard load balancing of tokens to experts can hinder performance for the vision modality. Following this, the authors make two main contributions 1) MsDaR -- They retain load balancing for language tokens, but do not do so for vision, to increase the specialisation for vision tokens. 2) VsDEA -- Identify vision \"tail\" tokens with a high variance and activate more experts for these tokens. \n\nReviewers appreciated the overall motivation of the paper, and the authors analysis to identify this mismatch in token-distributions. Moreover, the proposed method is practical too, as it does not add much overhead, and it can increase results too.\n\nHowever, the actual improvement from the method is unclear, as standard deviations are not reported for most experiments. During the rebuttal, the authors added Table 10 to the paper, but the standard deviations appear suspiciously low (and a standard deviation of 0 is even reported for 1 dataset). Re-training the model, but with a different random seed would surely introduce much more variance than this. It appears that the authors have only changed the seed during inference time? This does not answer the question of how statistically signficant the improvements actually are, given that throughout the paper, the improvement over the baseline is usually below 1 point.\n\nOther concerns included the fact that the imbalanced visual token distribution is an empirical observation, and may not hold for more recent MoE models. Unfortunately the authors have not tested their method on the most recent VLMs, like Qwen 3 VL or InternVL.\n\nTherefore, on the balance, the final decision is to reject this paper. Authors are encouraged to revise the paper according to the reviewer feedback and to resubmit to another venue."
+      },
+      "reviewer_concerns": {
+        "value": "The main weaknesses mentioned by the reviewers, and not addressed sufficiently during the rebuttal include\n\n- \"Main results show small improvements (+0.4 to +1.2, Table 1), but significance tests are only in Appendix C.2 (Table 18). Confidence intervals and variance should be included in the main text.\"\n- \"The “language near-uniform, vision long-tailed” characterization currently depends on the chosen models and visual tokenizer (Appendix D.2 notes 576 CLIP tokens per image) as well as specific router/Top-k settings\"\n- \"The choice of base models is narrow, limiting generalizability\"\n- \"The entire evaluation is limited to a single configuration using the LLaVA + ShareGPT dataset. MoE architectures typically realize their full benefits and stability when validated on llarge-scale pretraining or instruction-tuning datasets.\"\n- \"In tasks such as video understanding, the number of vision tokens can vastly exceed that of text tokens. How does LTDR scale in such high-token regimes?\"\n\nAlthough other concerns have been addressed, the AC considers the aforementioned points significant."
+      },
+      "reviewer_scores": {
+        "value": "Reviewers VYrS and eGjB, who initially rated weak reject (4) would probably have retained their scores.\n\nSimilarly, Reviewers Cafp and ZRpW, who initially rated weak accept (6) would probably have retained their scores."
+      }
+    },
+    "id": "bd5oHolE7K",
+    "forum": "Ommc0WBraJ",
+    "replyto": "Ommc0WBraJ",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission13490/Area_Chair_R6sS"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission13490/Senior_Area_Chairs",
+      "ICLR.cc/2026/Conference/Submission13490/Area_Chair_R6sS"
+    ],
+    "number": 1,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission13490/-/Meta_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1767723755456,
+    "cdate": 1767723755456,
+    "tmdate": 1770619399694,
+    "mdate": 1770619399694,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Meta_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "title": {
+        "value": "Response to Reviewer ZRpW (1/2)"
+      },
+      "comment": {
+        "value": "We sincerely thank reviewer **ZRpW** for the thoughtful and constructive feedback, which will help improve our work. Our responses are as follows.\n\n> W1: Adding cross router/backbone RPV distribution comparisons and variance analyses.\n\n***Response:*** We have updated the cross-router/backbone RPV distribution in ***Appendix D.2 Line 1234-1241***. Cross-Router: In the Top-Dynamic setting, expert activation is determined by token score ranking and expert capacity, where expert capacity is defined as $num_{\\text{token}} / num_{\\text{experts}} \\times 3$. The results indicate that the mean RPV of the vision tail under Top-1 is significantly lower than in other configurations, suggesting that increasing the number of parameters can enhance vision tail token learning. However, despite Top-Dynamic having the largest number of parameters, it does not outperform Top-a in terms of vision tail RPV, implying that simply increasing parameter count does not guarantee performance improvement. Cross-Backbone: The choice of backbone has a notable impact on mean RPV. Among the evaluated backbones, Phi-2 achieves the highest mean RPV, followed by StableLM, with Qwen yielding the lowest. The performance of the models aligns with this ranking.\n\n> W2: Details on VsDEA implementation and Molmo inference-time latency, and an analysis on the POPE adversarial subset.\n\n***Response:*** VsDEA Implementation: We have updated the renormalization procedure in ***Eq.12*** and ***Main 3.3 Line 296***. Our implementation, however, adheres to the MoE frameworks of the original models and does not specifically suppress noise from low-probability experts by using temperature/thresholding. Molmo Inference-Time Latency: As shown in the table below, there is no significant difference in inference latency between the configurations with $a=12$ (LTDR) and $k=8$ (Molmo). Analysis of the POPE: We attribute this to the recognition of vision tail tokens. As detailed in ***Appendix E Line 1269-1276***, such tokens are identified at the batch level, which may be constrained by potential false positives. Addressing this limitation constitutes an important direction for future research.\n\n**Table: Molmo Inference-time Latency on the A800-80G GPU**\n| Method | GPU | ChartQA | DocVQA | AI2D | VQA | AndroidControl | CountBenchQA | Avg (s) |\n|--------|-----|---------|--------|------|-----|----------------|--------------|---------|\n| Molmo | A800-80G | 184 | 200 | 190 | 196 | 89 | 705 | 261 |\n| +LTDR | A800-80G | 187 | 203 | 194 | 200 | 90 | 716 | 265 |\n\n> Q1: Strategy-swap ablation on the language side while keeping it on the vision side.\n\n***Response:*** We perform a strategy-swap ablation on the language side while keeping it on the vision side. The results, summarized in the table below, show that removing the load balancing loss on the language side (language+MsDAR) leads to fluctuating performance, with only a 0.2% average improvement compared to the vanilla model. Additionally, introducing text-specific dynamic expert activation (TsDEA) does not result in consistent performance gains. In contrast, eliminating the load balancing loss on the vision side (vision+MsDAR) produces stable improvements, and further incorporating vision-specific dynamic expert activation (VsDEA) enhances performance, achieving an average improvement of 1.2%.\n\n**Table: Strategy-swap Ablation on Vision and Language**\n| MoE-LLaVA_StableLM | GQA | ScienceQA | TextVQA | POPE | MME | MMBench | MM-Vet | Avg |\n|--------------------|-----|-----------|---------|------|-----|---------|--------|-----|\n| Vanilla | 60.3 | 62.6 | 50.1 | 85.7 | 1318.2 | 60.2 | 26.9 | 57.6 |\n| Language |\n| + MsDaR | 60.8 | 62.0 | 50.2 | 85.9 | 1254.1 | 60.0 | 28.0 | 57.8 |\n| + MsDaR&TsDEA | 60.1 | 61.2 | 50.4 | 86.2 | 1282.4 | 60.1 | 28.6 | 57.8 |\n| Vision |\n| + MsDaR | 61.1 | 62.3 | 51.2 | 86.6 | 1324.3 | 59.9 | 27.9 | 58.2 |\n| + MsDaR&VsDEA | 61.1 | 63.4 | 51.1 | 86.6 | 1363.5 | 60.6 | 29.9 | 58.8 |\n\n> Q2: Details on normalization, clipping, and temperature settings in Top-a, and their impact on gradients and communication costs.\n\n***Response:*** We perform renormalization after expert selection, without introducing any additional clipping or temperature settings in Top-a. Please refer to ***W2*** for details. Nevertheless, we believe that modifying clipping or temperature does affect both gradients and communication costs. For example, clipping can reduce communication costs by suppressing certain tokens, but it also causes gradients to descend more slowly or become unstable due to reduced information flow, leading to performance degradation (as demonstrated in ***Q3*** by the performance differences between Vanilla+Top-1 and Vanilla+Top-2). Similarly, adjusting the temperature may lead to comparable effects."
+      }
+    },
+    "id": "gELoA8GPOu",
+    "forum": "Ommc0WBraJ",
+    "replyto": "7NMYQs4XMp",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission13490/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission13490/Authors"
+    ],
+    "number": 1,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission13490/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764179757978,
+    "cdate": 1764179757978,
+    "tmdate": 1764846703552,
+    "mdate": 1764846703552,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "title": {
+        "value": "Response to Reviewer VYrS (3/3)"
+      },
+      "comment": {
+        "value": "> W11: Batch-wise mean-RPV thresholds may misclassify non-critical patches as tails. A learnable joint mechanism is suggested.\n\n***Response:*** We investigate a learnable threshold learning mechanism for identifying vision tail tokens, and details are provided in ***W9***. However, the threshold learned in this manner does not generalize well to downstream tasks. As indicated by our experimental results, this learnable approach performs at an intermediate level between the original model and the LTDR-based model. In future work, we aim to more precisely delineate the RPV boundary between vision head and tail tokens, which we expect will improve the generalizability of our method across diverse training datasets and model architectures.\n\n> Q1: The quantify correlation between high-RPV vision tokens and downstream performance.\n\n***Response:*** We relate the correlation between high-RPV vision tokens and downstream performance to the link between RPV and token informativeness. Please refer to ***W8*** for details. Moreover, the RPV distribution in ***Appendix D.2 Line 1225-1241***, together with the performance results in ***Main 4.2 Line 319-368***, further demonstrates a positive correlation between high-RPV vision tokens and downstream task performance.\n\n> Q2: Adaptive $a$: Could $a$ be chosen via RPV quantiles or a compute-budgeted policy?\n\n***Response:*** We have studied the RPV quantiles policy in ***Appendix B.5 Line 1064-1079***. Here, we experiment with a Top-P compute-budgeted policy that fixes the number of tokens per expert while dynamically selecting experts for each token. Specifically, expert activation is determined by token score ranking and expert capacity, where expert capacity is defined as $num_{\\text{token}} / num_{\\text{experts}} \\times 3$. As shown in the table below, this approach hinders performance improvement, indicating a more complex underlying issue that warrants further investigation.\n\n**Table: Top-P Compute-budgeted Policy**\n| MoE-LLaVA-StableLM | GQA | ScienceQA | TextVQA | POPE | MME | MMBench | MM-Vet | Avg |\n|--------------------|-----|-----------|---------|------|-----|---------|--------|-----|\n| LTDR+Top-P | 60.8 | 62.1 | 51.1 | 86.8 | 1332.8 | 60.2 | 28.9 | 58.3 |\n| LTDR+Top-a | 61.1 | 63.4 | 51.1 | 86.6 | 1363.5 | 60.6 | 29.9 | 58.8 |\n\n> Q3: Training stability: Does removing vision load balancing cause early expert skew or collapse?\n\n***Response:*** As shown in ***Appendix B.1 Line 920-940 and D.1 Line 1114-1126***, removing vision load balancing does not cause significantly expert collapse compared to the baseline. In some layers, without vision load balancing even results in a reduced and more evenly distributed expert load. We attribute this to the long-tailed distribution of vision tokens. As discussed in ***Main 3.2 Line 253-254***, the abundant vision head tokens are sufficiently diverse to be distributed across experts, resulting in relatively uniform expert utilization and preventing severe expert collapse. Vision tail tokens account for only about 13% of the total and retain a reasonable probability of being routed to different experts. Therefore, catastrophic expert collapse is not significant."
+      }
+    },
+    "id": "jviMnrfq8f",
+    "forum": "Ommc0WBraJ",
+    "replyto": "AvseSanXpa",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission13490/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission13490/Authors"
+    ],
+    "number": 7,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission13490/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764181779373,
+    "cdate": 1764181779373,
+    "tmdate": 1764846885461,
+    "mdate": 1764846885461,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "title": {
+        "value": "Summary of the Discussion Phase and Paper Revisions"
+      },
+      "comment": {
+        "value": "Dear Area Chair,\n\nWe sincerely thank you and the reviewers for the time and insightful assessment of our work. We highly appreciate the constructive feedback, which has greatly strengthened the paper. Below, we provide a summary of the consensus on the paper’s strengths and the revisions made in response.\n\n---\n\nFirst, we appreciate that all reviewers acknowledge the contribution and novelty of this work:\n* **Motivation:** The reviewers acknowledge the clarity and accessibility of the motivation (eGjB, Cafp), and further recognize the novelty (Cafp) and practical value (ZRpW) of the work.\n* **Method:** The proposed method is well received by the reviewers, who regard it as simple and practical while also exhibiting good compatibility and strong performance (ZRpW, VYrS, Cafp).\n* **Performance:** Having approved the method employed in this work, the reviewers further affirm its efficiency and generalizability (ZRpW, VYrS, eGjB).\n* **Reproducibility:** Drawing on the extensive comparative and ablation experiments as well as the cost analysis, the reviewers consider the method to be reproducible and reliable (ZRpW, VYrS, eGjB).\n\n---\n\nSecond, in response to the weaknesses and questions raised during review and discussion, we have made the following clarifications and additions:\n\n**Revisions to the paper:**\n\n***1. Comparative Experiments (ZRpW, VYrS, Cafp)***\n\n* Cross-step/router/backbone: Figures 8–10 present cross-step, cross-router, and cross-backbone RPV distributions, and Table 22 shows cross-router performance validating LTDR (ZRpW, VYrS, Cafp).\n* Strategy-swap ablation: Table 21 provides the strategy-swap ablation for vision and language (ZRpW, VYrS).\n* Sharpening vision token routing: Tables 23 and 26 compare sharpening-based routing methods to validate MsDaR (VYrS).\n* Threshold: Tables 22 and 25 compare compute-budgeted and learnable thresholds (VYrS).\n\n***2. Generalization Experiments (VYrS, eGjB, Cafp)*** \n\n* Threshold generalizability across models: Table 24 presents generalizability experiments on MoE-LLaVA with the Phi-2-2.7B model to address concerns regarding threshold generalization (VYrS).\n* Scalability to high vision-token scenarios: Table 29 evaluates scalability under higher vision-token settings, where LTDR outperforms the baseline with almost no increase in inference time (eGjB).\n* Validation on large-scale instruction-tuning datasets: Table 30 reports results on a larger instruction-tuning dataset, where the substantial performance gains over the baseline demonstrate LTDR’s strong generalization ability (Cafp).\n\n***3. Statistical Analysis (ZRpW, VYrS, eGjB)***\n\n* Molmo inference-time latency: Table 20 analyzes Molmo’s inference-time latency, demonstrating the efficiency of LTDR (ZRpW, VYrS).\n* Statistical evidence linking RPV and token informativeness: Table 27 compares the mean L2 norm across token groups, showing that tokens with higher RPV carry more information (VYrS).\n* Activated parameters: Table 28 reports the average number of activated experts and parameters, confirming that LTDR does not rely on increased computational overhead (eGjB).\n\n***4. Experimental Details (ZRpW, VYrS)***\n\nVsDEA implementation: Eq.12 has been refined to address the concerns regarding implementation details (ZRpW).\n\n**Discussion phase:** We submitted our response and revised manuscript on November 27. Unfortunately, due to the early conclusion of the discussion period, we did not receive any response or further feedback from the reviewers. We have made every effort to incorporate their feedback comprehensively into the revised manuscript. We believe the additional experiments and analyses listed above effectively address the reviewers' concerns regarding comparison, generalization, reproducibility, and model design.\n\n---\n\nThank you for your time and consideration. We hope this summary assists in your decision-making process.\n\nSincerely,\n\nAuthors of Paper #13490"
+      }
+    },
+    "id": "nAt2T8tO2j",
+    "forum": "Ommc0WBraJ",
+    "replyto": "Ommc0WBraJ",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission13490/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission13490/Authors"
+    ],
+    "number": 9,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission13490/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764847413991,
+    "cdate": 1764847413991,
+    "tmdate": 1764847413991,
+    "mdate": 1764847413991,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "title": {
+        "value": "Response to Reviewer ZRpW (2/2)"
+      },
+      "comment": {
+        "value": "> Q3: Broader RPV distribution and performance comparisons across routers/backbones.\n\n***Response:*** Please refer to ***W1*** for the RPV distribution across routers/backbones, and to ***Main 4.2 Line 317-368*** for performance comparisons across backbones. Here, we report the cross-router performance results, summarized in the table below. LTDR with the Top-1 achieves a 0.9% improvement over the vanilla model. Although dynamic routers provide additional gains, their performance remains below that of LTDR combined with Top-a.\n\n**Table: Cross-Router Performance**\n| MoE-LLaVA-StableLM | GQA | ScienceQA | TextVQA | POPE | MME | MMBench | MM-Vet | Avg |\n|--------------------|-----|-----------|---------|------|-----|---------|--------|-----|\n| Vanilla+Top-1 (k=1) | 58.6 | 55.8 | 45.0 | 85.2 | 1245.3 | 56.2 | 27.2 | 54.7 |\n| Vanilla+Top-2 (k=2) | 60.3 | 62.6 | 50.1 | 85.7 | 1318.2 | 60.2 | 26.9 | 57.6 |\n| LTDR+Top-1 (k=1) | 59.7 | 58.2 | 45.6 | 85.8 | 1302.9 | 57.1 | 27.0 | 55.6 |\n| LTDR+Dynamic (avg k=3) | 60.8 | 62.1 | 51.1 | 86.8 | 1332.8 | 60.2 | 28.9 | 58.3 |\n| LTDR+Top-a (avg k=2.26) | 61.1 | 63.4 | 51.1 | 86.6 | 1363.5 | 60.6 | 29.9 | 58.8 |\n\n> Q4: Can VsDEA incorporate a confidence- or consistency-based gating mechanism to suppress overconfidence at the vision side?\n\n***Response:*** We acknowledge the feasibility of the suggested approach for suppressing overconfidence on the vision side. However, our gating mechanism is designed to allow vision tail tokens to specialize in specific experts, whereas confidence- or consistency-based gating seeks to reduce conflicts among tokens assigned to the same expert. Their objectives may conflict in certain scenarios, making it challenging to balance the two strategies. We regard this as a promising direction for future research."
+      }
+    },
+    "id": "ysmYv9WBxa",
+    "forum": "Ommc0WBraJ",
+    "replyto": "7NMYQs4XMp",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission13490/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission13490/Authors"
+    ],
+    "number": 2,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission13490/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764179820652,
+    "cdate": 1764179820652,
+    "tmdate": 1764846742816,
+    "mdate": 1764846742816,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "title": {
+        "value": "Response to Reviewer VYrS (2/3)"
+      },
+      "comment": {
+        "value": "> W5: Expert overloading or training instability under large-scale K or extreme data distributions are not quantified.\n\n***Response:*** Molmo represents the latest vision-language MoE model under large-scale K (64) configuration. Our method achieves a measurable performance improvement (***Main 4.2 Line 319-354***) on this architecture while introducing no significant inference latency (the table below) compared to the vanilla model, demonstrating both the efficiency and stability of our approach.\n\n**Table: Molmo Inference-time Latency**\n| Method | GPU | ChartQA | DocVQA | AI2D | VQA | AndroidControl | CountBenchQA | Avg (s) |\n|--------|-----|---------|--------|------|-----|----------------|--------------|---------|\n| Molmo | A800-80G | 184 | 200 | 190 | 196 | 89 | 705 | 261 |\n| +LTDR | A800-80G | 187 | 203 | 194 | 200 | 90 | 716 | 265 |\n\n> W6: Confidence intervals and variances should be included in the main text.\n\n***Response:*** Thank you for the suggestion. We have incorporated this content into ***Main 4.5 Line 474-477***.\n\n> W7: The impact of reducing load balancing or adding constraints is not studied.\n\n***Response:*** Please refer to ***W3*** for the impact of adding sharpening vision token routing constraints (e.g., entropy regularization). Here, we analyze the effect of reducing load balancing, with results presented in the table below. Specifically, we decrease the vision-side load balancing coefficient from 0.01 to 0.001. The results indicate that this adjustment is less effective than removing the load balancing.\n\n**Table: Impact of Reducing Load Balancing**\n| MoE-LLaVA-StableLM | GQA | ScienceQA | TextVQA | POPE | MME | MMBench | MM-Vet | Avg |\n|-|-|-|-|-|-|---------|--------|-----|\n| Vanilla | 60.3 | 62.6 | 50.1 | 85.7 | 1318.2 | 60.2 | 26.9 | 57.6 |\n| Reducing-based | 60.2 | 62.4 | 50.9 | 86.3 | 1315.7 | 59.1 | 28.4 |\t57.8 |\n| LTDR | 61.1 | 63.4 | 51.1 | 86.6 | 1363.5 | 60.6 | 29.9 | 58.8 |\n\n> W8: The link between RPV and token informativeness needs stronger statistical or interpretability evidence.\n\n***Response:*** We evaluate the link between RPV and token informativeness from two aspects: 1) Performance-based analysis (interpretability). Higher model performance suggests that the corresponding tokens carry richer information. As described in ***Main 4.4, lines 415–425***, we sort tokens by RPV in descending order and classify those above the mean RPV as vision tail tokens (13%) and the remainder as vision head tokens (87%). Although vision head tokens are nearly $7 \\times$ more numerous than tail tokens, applying the VsDEA strategy to head tokens yields substantially lower performance compared to applying it to tail tokens. This performance gap indicates that high-RPV vision tail tokens encode more informative content. 2) Statistics-based analysis (statistical). A token group with a higher mean L2 norm of its vector representations reflects richer underlying information. We compare the mean L2 norm of the top 13% vision token vectors (vision tail tokens) with those of the vectors ranked between the top 13%-26% and the top 26%-39% by RPV. As shown in the table below, the first group exhibits a higher mean L2 norm than the latter two, providing further evidence that high-RPV vision tail tokens carry richer information.\n\n**Table: Statistics-based analysis**\n|  | mean L2 norm |\n|-|-|\n| Top-13% | 0.3158 |\n| Top-13% - Top-26% | 0.2124 |\n| Top-26% - Top-39% | 0.1475 |\n\n> W9: VsDEA’s choice of activated experts is empirical, systematic tuning or adaptive policies would improve credibility.\n\n***Response:*** Please refer to ***Q2*** for the adaptive policy. Here, we analyze the systematic tuning policy. Specifically, we introduce a learnable RPV threshold to identify vision tail tokens. Experimental results are summarized in the table below. The performance of the tuning method falls between that of the original model and the LTDR-based model.\n\n**Table: Systematic Tuning Policy**\n| MoE-LLaVA-StableLM | GQA | ScienceQA | TextVQA | POPE | MME | MMBench | MM-Vet | Avg |\n|-|-|-|-|-|-|-|-|-|\n| Vanilla | 60.3 | 62.6 | 50.1 | 85.7 | 1318.2 | 60.2 | 26.9 | 57.6 |\n| Tuning-based | 61.0 | 62.1 | 50.6 | 86.3 | 1322.3 | 59.9 | 28.9 | 58.1 |\n| LTDR | 61.1 | 63.4 | 51.1 | 86.6 | 1363.5 | 60.6 | 29.9 | 58.8 |\n\n> W10: Benefits under near-uniform token distributions are unclear.\n\n***Response:*** We investigate a multimodal MoE architecture for vision–language tasks. Owing to the inherently non-uniform token distribution in images, it is difficult to evaluate the benefits of our approach under near-uniform token distributions. Nevertheless, we find that although our method is designed to improve vision-token processing, it does not degrade the model’s ability to handle near-uniform language tokens. As shown in ***Main 4.2 Line 319-346***, datasets such as SQA contain language data with near-uniform token distributions, yet our model preserves performance on these tasks."
+      }
+    },
+    "id": "zMjqcQ4BDm",
+    "forum": "Ommc0WBraJ",
+    "replyto": "AvseSanXpa",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission13490/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission13490/Authors"
+    ],
+    "number": 6,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission13490/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764181574682,
+    "cdate": 1764181574682,
+    "tmdate": 1764846851891,
+    "mdate": 1764846851891,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  }
+]

@@ -1,0 +1,634 @@
+[
+  {
+    "replying_to": "Replying to PipeTune: Tuning Pipeline Parallelism for Efficient Vision-Language Model Training",
+    "display_title": "Official Review of Submission16124 by Reviewer mxG1",
+    "content": {
+      "summary": {
+        "value": "This paper addresses low GPU utilization in Vision-Language Model training under pipeline parallelism. The core problem is that heterogeneous samples with variable sequence lengths and mixed modalities create imbalanced microbatches and pipeline bubbles, wasting compute time.\n\nPipeTune is a runtime framework that jointly optimizes four strategies: computation-aware packing of samples into microbatches, adaptive microbatch sizing based on real-time statistics, microbatch reordering to balance workload across stages, and vision encoder pre-computation that overlaps ViT work with downstream processing. A lightweight simulator guides these decisions without changing training semantics.\n\nContributions:\n* A unified scheduling approach that jointly optimizes packing, sizing, and ordering of microbatches rather than tuning each parameter independently, minimizing per-stage compute variance to reduce pipeline bubbles.\n* Dynamic microbatch size selection that adapts to heterogeneous sample characteristics and fits stage-wise memory constraints, plus an encoder precompute strategy that co-locates the ViT with the first pipeline stage to overlap computation.\n* Empirical validation showing up to 40.7% iteration time reduction across VLMs with 3-13B parameter LLMs, with the approach being practical to deploy since it requires no changes to model architecture, training objectives, or optimizer code."
+      },
+      "soundness": {
+        "value": 3
+      },
+      "presentation": {
+        "value": 3
+      },
+      "contribution": {
+        "value": 3
+      },
+      "strengths": {
+        "value": "* **Joint, runtime optimization of PP knobs.** Treats packing, microbatch sizing, and microbatch ordering as a coupled problem (plus ViT precompute), directly reducing per-stage variance and 1F1B bubbles rather than tuning any single knob in isolation.\n\n* **Practical, low-friction integration.** Preserves training semantics (no loss/optimizer changes), uses a lightweight simulator/profiler, and leverages a sensible PP topology (ViT on stage-0 + caching) that fits common VLM stacks.\n\n* **Strong empirical signal with ablations.** Demonstrates sizable iteration-time reductions across models/hardware, with ablations that attribute additive gains to each component, suggesting robustness beyond a single setup."
+      },
+      "weaknesses": {
+        "value": "* Workload sensitivity (benefits fade as image fraction rises). The largest gains appear in regimes dominated by text (e.g., ≳80–90% text tokens or samples). As the image proportion increases, stage-0 (ViT+projector), the benifite of PipeTune decreases quickly.\n* Comparison to other PP approaches (e.g., LongVILA)\n* Dataset selection: rather a-typical. Most VLMs are post-trained on datasets such as LLaVA-OneVision / FineVision / Cambrian1"
+      },
+      "questions": {
+        "value": "* How do the reported gains scale when the image ratio rises beyond the text-heavy regime (e.g., 30–60% image samples) and when resolution/augments increase ViT FLOPs? Please include a sweep over modality mix and input resolution, with breakdown of stage-0 utilization, NVLink traffic, and end-to-end step time."
+      },
+      "flag_for_ethics_review": {
+        "value": [
+          "No ethics review needed."
+        ]
+      },
+      "rating": {
+        "value": 6
+      },
+      "confidence": {
+        "value": 3
+      },
+      "code_of_conduct": {
+        "value": "Yes"
+      }
+    },
+    "id": "ZnlxdhrHdj",
+    "forum": "NlizdhvhvM",
+    "replyto": "NlizdhvhvM",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission16124/Reviewer_mxG1"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission16124/Reviewer_mxG1"
+    ],
+    "number": 1,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission16124/-/Official_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1761435385214,
+    "cdate": 1761435385214,
+    "tmdate": 1762926296441,
+    "mdate": 1762926296441,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission16124 by Reviewer mxG1",
+    "display_title": "Official Comment by Authors",
+    "content": {
+      "comment": {
+        "value": "We thank the reviewer for the review and recognize our contribution. Below we respond to your reviews and hope that we can address your concerns and earn your support.\n\n- For W1, “as the image proportion increases, the benefit of PipeTune decreases” stems from the fact that, as the multimodal percentage increases, the overall sequence length tends to be longer. Thus, under the same GPU memory constraints, we end up with more microbatches in the pipeline. We use a simple simulation experiment to illustrate this. We assume a pipeline parallelism degree of PP = 4 and normalize the forward time of each microbatch to 1 on all stages. The backward time is set to be twice the forward time. We then simulate the 1F1B pipeline to obtain the overall latency. Next, we add noise sampled from Uniform(−s, s) to the forward time of each microbatch to simulate imbalance (The noise has zero mean so statistically we keep the overall workload the same). We simulate each case for 10,000 times and report the results in the table. Although imbalance increases the overall latency in all cases, the relative increase is smaller when there are more microbatches (num_mbs = 16). This helps explain why the benefits appear to be more pronounced in text-heavy settings. We also mentioned this in section 5.1 as we found that pipeline throughput tends to be more sensitive to stragglers when there are fewer micro-batches.\n| Noise | Num_mbs = 6            | Num_mbs = 8            | Num_mbs = 16             |\n|-------|------------------------|------------------------|--------------------------|\n| 0     | 27.00                  | 33.00                  | 57.00                    |\n| 0.3   | 30.23 (↑11.96%)        | 35.21 (↑6.70%)         | 62.25 (↑9.21%)           |\n| 0.6   | 36.30 (↑34.44%)        | 38.66 (↑17.15%)        | 65.78 (↑15.40%)          |\n\n- For W2, LongVILA is proposed to train models with extremely long videos, where sequence parallelism is adopted. Since our experiments are conducted with context length as 8k, sequence parallelism is not necessary. Also, with hybrid parallelism adopted in real-world training, i.e. DP + SP + PP, the optimization over PP dimension is orthogonal to the optimization over SP dimension. Thus, we believe the techniques in LongVILA are complementary to our work.\n\n- For W3 and Q1, we select the dataset following the previous work VILA and pick 3 different types of datasets to form the dataset with different mixtures. We emphasize in the paper that our method does not change the convergence semantics, thus the method can be seamlessly incorporated with other datasets and training configurations. From the workload perspective, increasing input resolutions has the similar effects of increasing the ratio of visual tokens in the input. We are working on including the experiments with new datasets and input resolutions."
+      }
+    },
+    "id": "VrCYBHBj94",
+    "forum": "NlizdhvhvM",
+    "replyto": "ZnlxdhrHdj",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission16124/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission16124/Authors"
+    ],
+    "number": 6,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission16124/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764189644324,
+    "cdate": 1764189644324,
+    "tmdate": 1764224298251,
+    "mdate": 1764224298251,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Comment by Authors",
+    "display_title": "Official Comment by Reviewer mxG1",
+    "content": {
+      "comment": {
+        "value": "Could you simulate the speedup at constant sequence lengths (1024*{2,4,8}) but varying the MM data ratio (down to ~15-20% text, 75-80% image-text)? If performance is of concern, you can assume sequence packing. (Note: this means multi-image for image-text samples).\n\nI would like to see expected performance improvement with more typical MM workloads."
+      }
+    },
+    "id": "hzjAr6sopv",
+    "forum": "NlizdhvhvM",
+    "replyto": "VrCYBHBj94",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission16124/Reviewer_mxG1"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission16124/Reviewer_mxG1"
+    ],
+    "number": 7,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission16124/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764278217033,
+    "cdate": 1764278217033,
+    "tmdate": 1764278217033,
+    "mdate": 1764278217033,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Comment by Reviewer mxG1",
+    "display_title": "Official Comment by Authors",
+    "content": {
+      "comment": {
+        "value": "Thank you for your reply! Would you mind clarifying what you mean by “constant sequence lengths but varying the MM data ratio”?\n\nIn our experiments, we use a constant global batch size to sample the original data. Then, based on the microbatch size (mbs) and the maximum sequence length (max_seq_len), we pack the samples into sequences with maximum length mbs * max_seq_len. The MM data ratio is controlled by altering the original data mixture. As the proportion of multimodal data increases, the original data samples tend to have longer sequence lengths, so we end up with more microbatches in the pipeline.\n\nFor example, suppose mbs = 2, max_seq_len = 4096, and the global batch size = 64. If the average sequence length of the original data is 1024, then on average we will have 64 * 1024 / (2 * 4096) = 8 microbatches. If the average sequence length is 2048, then we will have 64 * 2048 / (2 * 4096) = 16 microbatches.\n\nFor “constant sequence lengths,” do you mean keeping the sequence length of the original samples fixed (thus keeping the number of microbatches fixed) and only simulating an increase in the MM data ratio? If that is the case, the expected result is that the workload for the backbone model remains the same, while the vision encoder time may increase."
+      }
+    },
+    "id": "PL5oRvdive",
+    "forum": "NlizdhvhvM",
+    "replyto": "hzjAr6sopv",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission16124/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission16124/Authors"
+    ],
+    "number": 8,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission16124/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764280441142,
+    "cdate": 1764280441142,
+    "tmdate": 1764280441142,
+    "mdate": 1764280441142,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to PipeTune: Tuning Pipeline Parallelism for Efficient Vision-Language Model Training",
+    "display_title": "Official Review of Submission16124 by Reviewer awvn",
+    "content": {
+      "summary": {
+        "value": "This paper presents PipeTune, a framework for improving the efficiency of vision-language model (VLM) training under pipeline parallelism. The authors propose to jointly optimize micro-batch construction, ordering, size, and vision encoder scheduling. The method includes a computation-aware packing strategy, dynamic micro-batch resizing, encoder pre-computation, and reordering. A lightweight simulator guides runtime decisions. Experiments reportedly show up to 40% iteration-time reduction across different data mixtures and model scales."
+      },
+      "soundness": {
+        "value": 2
+      },
+      "presentation": {
+        "value": 3
+      },
+      "contribution": {
+        "value": 2
+      },
+      "strengths": {
+        "value": "1.\tThe paper clearly identifies practical inefficiencies in pipeline-parallel VLM training due to workload imbalance.\n2.\tThe paper provides a unified framework integrating several optimization strategies.\n3.\tThe paper is generally well-structured, and figures (e.g., Figure 2 and Figure 6) help clarify the ideas."
+      },
+      "weaknesses": {
+        "value": "1.\tThe paper refers to DistMM, Dynapipe, OrchMLLM, and DistTrain, which tackle highly similar efficiency and load balancing issues in pipeline parallelism. However, the experimental section only compares PipeTune against simple baselines (Original, Balanced), without direct comparisons to these strong baselines.\n2.\tThe technical novelty is limited. The method mainly combines existing heuristics (packing, reordering, pre-computation), without new theoretical insights.\n3.\tOnly limited hardware and dataset configurations were tested, downstream task performance was not reported, and training stability and convergence were not analyzed."
+      },
+      "questions": {
+        "value": "Refer to weakness."
+      },
+      "flag_for_ethics_review": {
+        "value": [
+          "No ethics review needed."
+        ]
+      },
+      "rating": {
+        "value": 2
+      },
+      "confidence": {
+        "value": 4
+      },
+      "code_of_conduct": {
+        "value": "Yes"
+      }
+    },
+    "id": "ARFo39O6dW",
+    "forum": "NlizdhvhvM",
+    "replyto": "NlizdhvhvM",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission16124/Reviewer_awvn"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission16124/Reviewer_awvn"
+    ],
+    "number": 2,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission16124/-/Official_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1761879716118,
+    "cdate": 1761879716118,
+    "tmdate": 1762926296058,
+    "mdate": 1762926296058,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission16124 by Reviewer awvn",
+    "display_title": "Official Comment by Authors",
+    "content": {
+      "comment": {
+        "value": "We thank the reviewer for the review and recognize that we identify practical inefficiencies and clearly deliver our ideas. Below we respond to your reviews and hope that we can address your concerns and earn your support.\n\n- For W1, we thank the reviewer for pointing this out and we will also adjust the paper content for clarification. Here we would like to provide a detailed explanation about the relationships and differences between our work and these previous works.\n\n- DistMM is proposed for accelerating distributed multimodal model training. In this work, the author’s basic assumption is that a multimodal model has both image and text submodules. They will take the inputs and process independently, then followed by a modality interaction step. This assumption makes sense for CLIP-like models, but is no-longer true for today’s vision-language models. A modern VLM adopts a language model as the backbone and uses a vision encoder to transform the vision inputs into tokens and concatenates them with textual tokens for processing. The image and text submodules cannot process the input independently and there is no explicit interaction step. The mid-point synchronization proposed by the author does not work for the pipeline parallelism for VLM training.\n\n- Dynapipe is proposed based on the assumption that packing variable-length sequences for batch processing requires wasted attention computation over the entire packed sequence. Thus, attention masks are needed afterwards to prevent tokens from attending across sample boundaries. However, as we discussed in section 2.2, recent techniques like FlashAttention-2 have further optimized the kernels for variable-length input, which eliminate the redundant attention computation between unrelated tokens. In Dynapipe, the author formed the microbatches via padding, which requires adding zero tokens to match the maximum sequence length within the microbatch. As we mentioned in section 3.2, the average sequence length of MMC4 can be 17.83 times longer than FLAN. Thus, we find that padding will incur 16% - 36% computation waste across DataMix1, DataMix2 and DataMix3 in our experiments. The newer works, ie. WLB-LLM, DistTrain, OrchMLLM, have adopted the packing as the de-facto methods for processing variable-length sequences in training, which corresponds to the “Original” baseline in our experiments.\n\n- As we discussed in the section 6, OrchMLLM is one of the related works that investigates the methods for re-balancing workloads across the data parallel dimension so as to eliminate potential bottlenecks. With hybrid parallelism adopted in real-world training, i.e., 3D-parallel (DP + TP + PP), the optimization over PP dimension is orthogonal to the optimization over DP dimension. Thus, we believe the techniques in OrchMLLM are complementary to our work.\n\n- DistTrain delivers disaggregated scheduling for multimodal training so as to tackle the model and data heterogeneity. The vision encoder used in our experiments is relatively lightweight compared to the LLM backbone - a common setup in many open-sourced VLMs and we did not connect the backbone model with a generator (as they did in DistTrain), thus we focus on the training inefficiency introduced by data heterogeneity. To tackle the inefficiencies brought by data heterogeneity, in DistTrain they propose a heuristic microbatch reordering algorithm to migrate the stragglers in the pipeline. In PipeTune we search for the optimal ordering via clustering and permutation. To compare the effectiveness of these two methods, we simulate two scenarios: simple (pp = 4, num_mbs = 8) and complex (pp = 8, num_mbs = 32). For each scenario, we sample the time cost of each stage from a Zipf distribution, varying the distribution’s parameter from 1.2 to 2.0 to control skewness. In the table below we show the bubble ratio within the pipeline. Lower means better effectiveness. ‘Exhaustive search’ is the setting where we try all the possible ordering. It is only computationally feasible in the simple scenario. As you can see, our method consistently achieves a lower bubble ratio compared to DistTrain heuristic method. \n\nSimple:\n| Zipfs | w/o reorder | Our method | DistTrain (Heuristic) | Exhaustive Search |\n|-------|-------------|------------|------------------------|-------------------|\n| 1.2   | 56.7272     | 45.0723    | 53.2478               | 44.8589           |\n| 1.5   | 56.4196     | 46.6334    | 51.0435               | 46.5867           |\n| 2.0   | 51.3643     | 46.2854    | 47.2005               | 46.2854           |\n\nComplex:\n| Zipfs | w/o reorder | Our method | DistTrain (Heuristic) | Exhaustive Search |\n|-------|-------------|------------|------------------------|-------------------|\n| 1.2   | 71.1118     | 44.7085    | 65.2296               | N/A               |\n| 1.5   | 70.6739     | 49.4575    | 67.1735               | N/A               |\n| 2.0   | 70.2131     | 54.0264    | 67.4068               | N/A               |"
+      }
+    },
+    "id": "WkH66RQwtb",
+    "forum": "NlizdhvhvM",
+    "replyto": "ARFo39O6dW",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission16124/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission16124/Authors"
+    ],
+    "number": 4,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission16124/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764189550663,
+    "cdate": 1764189550663,
+    "tmdate": 1764226049826,
+    "mdate": 1764226049826,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Comment by Authors",
+    "display_title": "Official Comment by Authors",
+    "content": {
+      "comment": {
+        "value": "- For W2, we believe one of our core contributions is that we provide a holistic solution to improve the efficiency of pipeline parallelism when training VLMs. Specifically, we provide a unified framework that systematically mitigates the inefficiencies caused by micro-batch imbalance, inter-iteration fluctuation, and modality composition variance, whereas none of the previous works have examined these issues in a systematic way. Especially, as shown in Table 2, adaptive micro-batch sizing emerges as the dominant contributor for performance improvement when training with multimodal-heavy datasets. However, none of the previous works have spotted that we can adaptively adjust the micro-batch sizes to tackle inter-iteration fluctuation. Thus, we believe our contributions go beyond combining existing heuristics. \n\n- For W3, we experiment on two super-computing clusters to evaluate PipeTune under different hardwares and construct mixed datasets to evaluate PipeTune under different data heterogeneity conditions. We emphasize in the paper that our method does not change the convergence semantics, thus the method can be seamlessly incorporated with other datasets and training configurations. We provide the detailed explanation in the appendix A.2 to analyze the equivalence of training semantics and include the loss curve to show that the numeric values of losses can perfectly match between different settings."
+      }
+    },
+    "id": "AqSDkUipms",
+    "forum": "NlizdhvhvM",
+    "replyto": "WkH66RQwtb",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission16124/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission16124/Authors"
+    ],
+    "number": 5,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission16124/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764189612107,
+    "cdate": 1764189612107,
+    "tmdate": 1764189612107,
+    "mdate": 1764189612107,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to PipeTune: Tuning Pipeline Parallelism for Efficient Vision-Language Model Training",
+    "display_title": "Official Review of Submission16124 by Reviewer jsBD",
+    "content": {
+      "summary": {
+        "value": "This paper presents PipeTune, a framework for optimizing pipeline parallelism in VLM training by addressing inefficiencies caused by data heterogeneity. The system jointly optimizes four aspects: micro-batch construction through computation-aware packing, dynamic micro-batch sizing, micro-batch execution ordering, and vision encoder pre-computation scheduling. PipeTune uses a lightweight DAG-based simulator to guide runtime decisions and achieve up to 40.7% reduction in iteration time across various model sizes (3B-13B parameters) and dataset mixtures. The approach is evaluated on two GPU clusters using pipeline parallelism across 4 nodes."
+      },
+      "soundness": {
+        "value": 3
+      },
+      "presentation": {
+        "value": 3
+      },
+      "contribution": {
+        "value": 2
+      },
+      "strengths": {
+        "value": "1. Problem formulation: The paper clearly identifies and categorizes three distinct sources of inefficiency in VLM training (micro-batch imbalance, inter-iteration fluctuation, and modality composition variance); good motivation for the proposed solutions.\n\n2. Holistic optimization approach: Rather than addressing individual bottlenecks in isolation, PipeTune jointly optimizes multiple dimensions (e.g., packing, sizing, ordering, scheduling), demonstrating complementary gains through ablation studies.\n\n3. Practical implementation and evaluation: The system is built on PyTorch-native TorchTitan framework and evaluated across diverse realistic settings, with detailed breakdown of contribution from each component."
+      },
+      "weaknesses": {
+        "value": "1. Limited novelty of individual components: While the holistic combination is valuable, each individual technique may have prior works... The computation-aware packing is acknowledged as inspired by WLB-LLM, encoder pre-computation follows Optimus, and micro-batch reordering builds on established ideas from DynaPipe. The paper's primary contribution appears to be engineering integration rather than algorithmic innovation. The authors should more explicitly position their contribution as a systems integration work and provide clearer articulation of what technical challenges arise from combining these techniques.\n\n2. Only tested with relatively small vision encoders (0.4B SigLIP); scalability to larger encoders (e.g., 4B+ models used in state-of-the-art VLMs) is unclear\n\n3. No comparison with recent concurrent work (OrchMLLM, Zheng et al., 2025 is cited but not compared)\n\n4. Missing convergence validation - while the paper claims \"without affecting convergence behavior,\" no learning curves or downstream task performance is shown\n\n5. Algorithm 1's two-stage greedy strategy (lines 4-9: minimize FLOPs, lines 8-9: fallback to minimum length) lacks theoretical or empirical justification for why this heuristic is optimal\n\n6. The clustering-based approach for micro-batch ordering (Section 5.2) limits clusters to six but provides no analysis of this hyperparameter choice or its impact on solution quality\n\n\n7. Simulator accuracy and validation concerns: The DAG-based simulator is central to PipeTune's decision-making, yet its accuracy is never validated. The paper mentions offline profiling to characterize computation time vs. sequence length relationships, but provides no details on: (1) the functional form of these models, (2) their prediction error across different sequence lengths and hardware, (3) how communication costs are modeled, (4) whether the simulator accounts for GPU kernel launch overhead, memory bandwidth constraints, or other real-world factors. Without this validation, it's unclear whether observed gains come from good optimization decisions or from systematic simulator bias that happens to align with reality. The authors should provide detailed simulator validation showing predicted vs. actual latency across representative scenarios."
+      },
+      "questions": {
+        "value": "Please address the implicitly embedded questions in the weakness.\n\nHow does encoder pre-computation affect peak memory usage? How are communication costs for encoder outputs modeled in the simulator, especially when pre-computed results need to be transferred?\n\nWhat APIs or interfaces would practitioners use to integrate PipeTune into their training pipelines? How sensitive is the approach to profiling accuracy - what happens if hardware characteristics change during training?"
+      },
+      "flag_for_ethics_review": {
+        "value": [
+          "No ethics review needed."
+        ]
+      },
+      "details_of_ethics_concerns": {
+        "value": "NA"
+      },
+      "rating": {
+        "value": 4
+      },
+      "confidence": {
+        "value": 3
+      },
+      "code_of_conduct": {
+        "value": "Yes"
+      }
+    },
+    "id": "KIkU41qQs1",
+    "forum": "NlizdhvhvM",
+    "replyto": "NlizdhvhvM",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission16124/Reviewer_jsBD"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission16124/Reviewer_jsBD"
+    ],
+    "number": 3,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission16124/-/Official_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1761984436201,
+    "cdate": 1761984436201,
+    "tmdate": 1762926295735,
+    "mdate": 1762926295735,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission16124 by Reviewer jsBD",
+    "display_title": "Official Comment by Authors",
+    "content": {
+      "comment": {
+        "value": "We thank the reviewer for the review and recognize that we clearly identify the inefficiencies in VLM training and provide a holistic solution. Below we respond to your reviews and hope that we can address your concerns and earn your support.\n\n- For W1, the reviewer is right that delivering a holistic solution is one of our core contributions. While we reference the techniques proposed by other works, we provide a unified framework that systematically mitigates inefficiencies caused by micro-batch imbalance, inter-iteration fluctuation, and modality composition variance, which cannot be realized by the previous works that are typically designed for a single source of inefficiency. In addition, as shown in Table 2, adaptive micro-batch sizing emerges as the dominant contributor to performance improvement when training with multi-modal heavy datasets. However, none of the previous works have identified that adaptively adjusting the micro-batch sizes can effectively address inter-iteration fluctuation.\n\n- For W2, we design our experiment settings based on the configurations of mainstream open-sourced VLM models. For example, NVILA-8B/15B models released by NVIDIA adopt the Sigclip-400M model as the vision encoder (same as ours). DeepSeek-VL2 (normal, small, tiny) models adopt 400M vision encoders. Qwen2.5-VL-3B/7B/32B/72B all use the vision encoder with ~500M parameters. Thus, we believe the 0.4B vision encoder is a reasonable setting. We agree that scaling the vision encoders sizes is an important direction for further exploration, however with larger encoders, we may also scale the backbone models proportionally. We leave this for future work due to resource constraints.\n\n- For W3, as we discussed in the section 6, OrchMLLM is one of the related works that investigates the methods for re-balancing workloads across the data parallel dimension so as to eliminate potential bottlenecks. With hybrid parallelism adopted in real-world training, i.e., 3D-parallel (DP + TP + PP), the optimization over pipeline parallel dimension is orthogonal to the optimization over DP dimension. Thus, we believe the techniques in OrchMLLM are complementary to our work.\n\n- For W4, we add the loss curve in the appendix A.2. to show that the numeric values of losses can perfectly match between different settings and explain in detail why our method does not affect the training convergence semantics.\n\n- For W5, We add more details in the appendix A.3. to explain the packing algorithm. In short, having the optimal packing has proved to be NP-hard, and the greedy algorithm we adopt can yield an approximation solution within 4/3 of the optimal. In practice, we find that the packing algorithm delivers good performance as the variances of stage latency between microbatches are generally lower than 10%. For the micro-batches that are still slightly imbalanced, we also have micro-batch reordering in the joint optimization that can further reduce the straggler effects.\n\n- For W6, the cluster number is limited to control the search overhead as the permutation costs grow super-exponentially. To show the effectiveness of this method, we compare it with the heuristic method proposed in DistTrain and exhaustive search (search all the possible ordering). In the table below we simulate two scenarios: simple (pp = 4, num_mbs = 8) and complex (pp = 8, num_mbs = 32). For each scenario, we sample the time cost of each stage from a Zipf distribution, varying the distribution’s parameter from 1.2 to 2.0 to control skewness. The number represents the bubble ratio and lower means better. \n\n- Simple:\n| Zipfs | w/o reorder | Our method | DistTrain (Heuristic) | Exhaustive Search |\n|-------|-------------|------------|------------------------|-------------------|\n| 1.2   | 56.7272     | 45.0723    | 53.2478               | 44.8589           |\n| 1.5   | 56.4196     | 46.6334    | 51.0435               | 46.5867           |\n| 2.0   | 51.3643     | 46.2854    | 47.2005               | 46.2854           |\n\n- Complex:\n| Zipfs | w/o reorder | Our method | DistTrain (Heuristic) | Exhaustive Search |\n|-------|-------------|------------|------------------------|-------------------|\n| 1.2   | 71.1118     | 44.7085    | 65.2296               | N/A               |\n| 1.5   | 70.6739     | 49.4575    | 67.1735               | N/A               |\n| 2.0   | 70.2131     | 54.0264    | 67.4068               | N/A               |\n\nAs you can see, our method consistently achieves a lower bubble ratio compared to the heuristic method. In simple cases where exhaustive search is feasible, it can achieve near-optimal performance."
+      }
+    },
+    "id": "P9gy61A2Ry",
+    "forum": "NlizdhvhvM",
+    "replyto": "KIkU41qQs1",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission16124/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission16124/Authors"
+    ],
+    "number": 2,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission16124/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764189340646,
+    "cdate": 1764189340646,
+    "tmdate": 1764189340646,
+    "mdate": 1764189340646,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Comment by Authors",
+    "display_title": "Official Comment by Authors",
+    "content": {
+      "comment": {
+        "value": "- For W7,  thanks to the reviewer for pointing this out. We add more details in the appendix A.4 and A.5 to discuss the profiling and simulator. We also include comparison results between the actual and simulated latencies for validation. The results show that the relative ordering of different configurations is consistent between the actual and simulated latencies.\n\n- For Q2, encoder pre-computation does not affect the peak memory usage. As we discussed in section 2.2, we adopt the co-located solution when scheduling vision encoder in the pipeline parallelism. The encoder pre-computations are scheduled when the stage where the vision encoder resides is idle and the generated embeddings are used as the part of the inputs for later microbatch computation on that stage, so there is also no need to transfer the computed results.\n\n- For Q3, we design PipeTune so that practitioners don’t need to make substantial changes to the interfaces of their training pipelines, which we consider a strength of our design. Most optimizations are applied in the data-loading stage: balancing microbatches and determining new microbatch sizes and their ordering. The training pipelines simply consume repacked and re-ordered microbatches for computation. The only difference lies in encoder pre-computation, where we need to alter the training schedule. For profiling, we require partitioners to re-profile whenever the hardware changes to ensure accurate estimation. The profiling cost is generally tiny compared to end-to-end training and is incurred only once per (model, hardware) pair. For common stacks (e.g., a given VLM architecture on A100 or H100 clusters), this cost is amortized across many training runs."
+      }
+    },
+    "id": "ArKmtGfKnY",
+    "forum": "NlizdhvhvM",
+    "replyto": "P9gy61A2Ry",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission16124/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission16124/Authors"
+    ],
+    "number": 3,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission16124/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764189356605,
+    "cdate": 1764189356605,
+    "tmdate": 1764189356605,
+    "mdate": 1764189356605,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to PipeTune: Tuning Pipeline Parallelism for Efficient Vision-Language Model Training",
+    "display_title": "Official Review of Submission16124 by Reviewer vZY6",
+    "content": {
+      "summary": {
+        "value": "This paper introduces PipeTune, a framework designed to optimize pipeline parallelism for training VLMs.  The core problem it addresses is the inefficiency in pipeline parallelism caused by data heterogeneity."
+      },
+      "soundness": {
+        "value": 3
+      },
+      "presentation": {
+        "value": 2
+      },
+      "contribution": {
+        "value": 3
+      },
+      "strengths": {
+        "value": "1. The paper proposes a computation-aware packing algorithm to balance workloads across micro-batches. \n2. The paper employs a pipeline simulator to estimate the latency to dynamically adjust the micro-batch size, addressing the fluctuations in the number of micro-batches across iterations.\n3. The paper uses encoder pre-computation and micro-batch reordering to solve the modality composition variance problem across micro-batches."
+      },
+      "weaknesses": {
+        "value": "1. The paper's primary contribution is the joint optimization guided by a simulator, yet the details are  underdeveloped.  The details of how the DAG-based simulator actually models computational time from input sequence length, and the search process for the optimal micro-batch sizes and ordering are omitted.\n2. The simulator's latency estimates depend on an offline profiling step that is specific to a given hardware setup and model architecture. Therefore, any change in hardware or model requires a costly re-profiling. The paper does not discuss the overhead of this mandatory profiling, making the practical adoption cost in new environments unclear.\n3. According to Fig.6, the effectiveness of the Balance Packing Algorithm is inconsistent and appears limited to specific data compositions. While it provides a significant reduction in iteration time in the text-dominant setting (DataMix1) , its benefit is far less pronounced in multimodal-heavy settings (DataMix2 and DataMix3). This suggests that it only partially addresses the data heterogeneity problem.\n4. The ablation study in Table 2 groups \"Micro-batch reordering\" with \"Encoder pre-computation\". However, the encoder pre-computation follows prior work (Feng et al., 2025), therefore it is impossible to isolate the contribution. \n5. The novelty of this work is a bit moderate. While the proposed PipeTune consist of multiple individual techniques (e.g. FLOPs-based packing, micro-batch reordering, and lightweight simulator–guided search), most of them are incremental extensions or integrations of existing ideas."
+      },
+      "questions": {
+        "value": "1. Please provide a detailed description for the pipeline simulator. How are stage latencies estimated from the offline profiling? Also, please provide the full search algorithm of how optimal micro-batch sizes and ordering are determined.\n2. Please include the experiment to clarify the practical benefit of using a FLOPs-based packing estimate versus the latency-based one from prior work (Wang et al. 2025). \n3. The paper claims that the proposed adaptive micro-batch sizing do not alter \"training semantics\". However, dynamically changing the micro-batch size alters the number of gradient accumulation steps, which could impact convergence. Please provide experimental evidence (e.g., training loss curves) to support your claim that convergence is unaffected."
+      },
+      "flag_for_ethics_review": {
+        "value": [
+          "No ethics review needed."
+        ]
+      },
+      "rating": {
+        "value": 6
+      },
+      "confidence": {
+        "value": 4
+      },
+      "code_of_conduct": {
+        "value": "Yes"
+      }
+    },
+    "id": "MMzNdtgo81",
+    "forum": "NlizdhvhvM",
+    "replyto": "NlizdhvhvM",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission16124/Reviewer_vZY6"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission16124/Reviewer_vZY6"
+    ],
+    "number": 4,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission16124/-/Official_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1761994818511,
+    "cdate": 1761994818511,
+    "tmdate": 1762926295387,
+    "mdate": 1762926295387,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission16124 by Reviewer vZY6",
+    "display_title": "Official Comment by Authors",
+    "content": {
+      "comment": {
+        "value": "We thank the reviewer for the careful reading and constructive feedback. Below we respond to your reviews and hope that we can address your concerns.\n\n- For W1, W2 and Q1, the reviewer is right that the simulator-guided optimization is central to the PipeTune design. One of our core contributions is that we provide a unified framework for joint optimization and the simulator is used to guide the configuration. We expand section 4 and provide more details about the simulator and profiling in the appendix A4, A5. With different hardwares and models, the partitioners are required to re-profile for accurate estimation. In terms of the profile cost, it’s generally tiny compared to end-to-end training (orders of magnitude smaller than a single training run) and is done once per (model, hardware) pair. For common stacks (e.g., a given VLM architecture on A100 or H100 clusters), this cost is amortized across many training runs.\n\n- For W3, “the benefit seems to be less pronounced in multimodal-heavy settings” stems from the fact that, as the multimodal percentage increases, the overall sequence length tends to be longer. Thus, under the same GPU memory constraints, we end up with more microbatches in the pipeline. We use a simple simulation experiment to illustrate this. We assume a pipeline parallelism degree of PP = 4 and normalize the forward time of each microbatch to 1 on all stages. The backward time is set to be twice the forward time. We then simulate the 1F1B pipeline to obtain the overall latency. Next, we add noise sampled from Uniform(−s, s) to the forward time of each microbatch to simulate imbalance (The noise has zero mean so statistically we keep the overall workload the same). We simulate each case for 10,000 times and report the results in the table. Although imbalance increases the overall latency in all cases, the relative increase is smaller when there are more microbatches (num_mbs = 16). This helps explain why the benefits appear to be more pronounced in text-heavy settings. We also mentioned this in section 5.1 as we found that pipeline throughput tends to be more sensitive to stragglers when there are fewer micro-batches.\n| Noise | Num_mbs = 6            | Num_mbs = 8            | Num_mbs = 16             |\n|-------|------------------------|------------------------|--------------------------|\n| 0     | 27.00                  | 33.00                  | 57.00                    |\n| 0.3   | 30.23 (↑11.96%)        | 35.21 (↑6.70%)         | 62.25 (↑9.21%)           |\n| 0.6   | 36.30 (↑34.44%)        | 38.66 (↑17.15%)        | 65.78 (↑15.40%)          |\n\n- For W4 and W5, in this work we focus on providing a holistic solution to improve the efficiency of pipeline parallelism when training VLMs. Specifically, we propose a unified framework that systematically mitigates inefficiencies caused by micro-batch imbalance, inter-iteration fluctuation, and modality composition variance, whereas none of the previous works have examined these issues in a systematic way. For example, for encoder pre-computation, we adopt it as part of the solution for alleviating modality composition variance, which was not discussed by Feng et al., 2025. In addition, as shown in Table 2, adaptive micro-batch sizing emerges as the dominant contributor to performance improvement. However, none of these previous works have identified that adaptively adjusting the micro-batch sizes can effectively address inter-iteration fluctuation.\n\n- For Q2, we discuss in the appendix A.3 that direct latency estimation tends to be inaccurate, especially for short sequences. As shown in Figure 10, for short sequences, due to the low hardware utilization, the overall latency does not follow the linear or quadric relationship with the overall sequence length. Since we pack the balanced microbatches incrementally, we choose to estimate the computational cost in FLOPs to better distinguish the workloads across micro-batches.\n\n- For Q3, we provide the detailed explanation in the appendix A.2 to analyze the equivalence of training semantics. In short, the reviewer is right that “dynamically changing the micro-batch size alters the number of gradient accumulation steps”. However, all the reordering and repartitioning happen within the global batch. Thus, for each optimizer step, the overall valid tokens that are used for gradient computation are the same. For each microbatch, instead of computing the average loss within that microbatch and accumulating the gradients, we just need to divide the overall loss with the number of valid tokens within the global batch. In this way, no matter how we change the microbatch orders and sizes, the training convergence semantics will not be affected. We also add the loss curve of the 3B model to show that the numeric values of losses can perfectly match between the different settings, further proving that our method does not affect the training semantics."
+      }
+    },
+    "id": "wJy0uRdI0r",
+    "forum": "NlizdhvhvM",
+    "replyto": "MMzNdtgo81",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission16124/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission16124/Authors"
+    ],
+    "number": 1,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission16124/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764189097354,
+    "cdate": 1764189097354,
+    "tmdate": 1764189097354,
+    "mdate": 1764189097354,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to PipeTune: Tuning Pipeline Parallelism for Efficient Vision-Language Model Training",
+    "display_title": "Meta Review of Submission16124 by Area Chair 2cig",
+    "content": {
+      "summary": {
+        "value": "This paper proposes PipeTune, a runtime framework to improve pipeline-parallel training efficiency for vision-language models under heterogeneous, multimodal workloads. PipeTune jointly optimizes computation-aware micro-batch packing, adaptive micro-batch sizing, micro-batch ordering, and vision encoder pre-computation, guided by a lightweight simulator built from offline profiling. Experiments on 3B-13B VLMs across two clusters report up to ~40% iteration-time reduction, with ablations showing complementary gains from the different components.\n\nAcross the reviews, there is consensus that the paper tackles an important and practical problem and presents a well-engineered system with convincing empirical speedups. However, reviewers are divided on whether the contribution meets ICLR’s bar for novelty and conceptual contribution. Two reviewers view the work as a solid but incremental systems integration (scores 6, 6), while others emphasize limited algorithmic novelty, missing direct comparisons to strong prior systems, and concerns about evaluation breadth and simulator centrality (scores 4, 2). The rebuttal clarified several technical points and added supporting evidence, but did not fundamentally change these assessments."
+      },
+      "reviewer_concerns": {
+        "value": "Addressed:\n* Clarified simulator design, profiling cost, and provided validation that simulated latencies preserve configuration ordering.\n* Explained why adaptive micro-batch sizing and reordering do not change training semantics, with added loss curves.\n* Better positioned the work relative to prior systems and explained weaker gains in multimodal-heavy regimes.\n\nPartially unresolved:\n* Core novelty remains incremental, with most components extending or integrating prior ideas.\n* Lack of direct end-to-end comparisons to strong related systems.\n* Limited evaluation breadth (e.g., larger vision encoders, more vision-heavy datasets), and reliance on a simulator without deep quantitative validation in the main text."
+      },
+      "reviewer_scores": {
+        "value": "* Reviewer vZY6 (6): likely unchanged.\n* Reviewer jsBD (4): likely unchanged.\n* Reviewer awvn (2): likely unchanged.\n* Reviewer mxG1 (6): likely unchanged."
+      }
+    },
+    "id": "zGH0OdFz3n",
+    "forum": "NlizdhvhvM",
+    "replyto": "NlizdhvhvM",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission16124/Area_Chair_2cig"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission16124/Senior_Area_Chairs",
+      "ICLR.cc/2026/Conference/Submission16124/Area_Chair_2cig"
+    ],
+    "number": 1,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission16124/-/Meta_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1765179121077,
+    "cdate": 1765179121077,
+    "tmdate": 1770619514476,
+    "mdate": 1770619514476,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Meta_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to PipeTune: Tuning Pipeline Parallelism for Efficient Vision-Language Model Training",
+    "display_title": "Paper Decision",
+    "content": {
+      "title": {
+        "value": "Paper Decision"
+      },
+      "decision": {
+        "value": "Reject"
+      },
+      "comment": {
+        "value": ""
+      }
+    },
+    "id": "uB2CqZjtot",
+    "forum": "NlizdhvhvM",
+    "replyto": "NlizdhvhvM",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Program_Chairs"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Program_Chairs"
+    ],
+    "number": 1,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission16124/-/Decision",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1769417201372,
+    "cdate": 1769417201372,
+    "tmdate": 1770354079997,
+    "mdate": 1770354079997,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Decision",
+    "license": "CC BY 4.0",
+    "version": 2
+  }
+]
