@@ -1,0 +1,830 @@
+[
+  {
+    "content": {
+      "comment": {
+        "value": "## Neural CFL Ablation (2/2)\n\n> *Although it's a fair point that a neural solver will have a different internal grid resolution than what is used for the PDE outside the network, presumably one knows what is the architecture they're dealing with and what that coarse grid resolution is. Why not just compute an adaptive time step - classically - using that coarser scale (which should be known from looking at the network architecture you choose) and eschewing the proposed neural CFL predictor?*\n\n> *If the answer to the above is \"you could do either, but neural CFL predictor is faster while still just as accurate,\" can we see a study on that?*\n\nAs we have discussed above, it is not an issue with the model's internal representation precluding the use of the CFL condition, but rather that neural solvers are trained on temporally coarsened data. Specifically, given a classical solver solution, we select every $J$-th step, e.g., $J=100$ in our circular blast case. This means that there are 99 CFD states between $u(t_1)$ and $u(t_2)$, with the timestep between each of these states determined using the CFL condition such that $\\Delta t_1$ is actually the sum of 100 smaller timesteps. Applying the CFL condition to $u(t_1)$ will lead to a predicted  $\\hat\\Delta t_1$ that is on the order of 100 times smaller than the true $\\Delta t_1$. \n\nAdditionally, the CFL condition relies on the spacing of the spatial discretization, although ML CFD datasets apply spatial coarsening. It also requires specific field variables (e.g., temperature, sound speed), while neural solvers often model only a subset of these quantities. The latter two points result in greater misalignment when attempting to apply the CFL condition to $\\hat u(t_1)$, which is likely to be more spatially coarse than the data during the generation process and may not even contain all of the fields needed to compute the condition.   \n\nBecause the neural solver is trained with coarsened timesteps that are roughly two orders of magnitude larger than the CFL-derived $\\hat\\Delta t_1$, the inputs $(u(t_1), \\hat\\Delta t_1)$ fall far outside the timestep range the solver was trained on, leading to worse performance. Therefore, we need a neural CFL model to map from our predicted $\\hat u(t_1)$ to a step size $\\hat \\Delta t$ which is close to the step sizes taken in the training data for states similar to $\\hat u(t_1)$ such that the pair $(\\hat u(t_1),\\hat \\Delta t)$ is not OOD for the neural solver. Please see **Section 3.1** for a more detailed discussion of the above points.\n\nWe instead perform an alternative ablation on the neural CFL model that avoids this small-timestep issue using a simpler **Mean Prediction model**. The mean prediction model replaces the neural CFL model by instead predicting every step as the mean step size $\\bar \\Delta t$ from the training data. We have added an ablation on the neural CFL model comparing it to an oracle model and the mean prediction model in **Appendix I**:\n\n> In this section, we evaluate and ablate the neural CFL module in ShockCast by replacing it with two alternatives: an oracle model and a mean prediction model. The oracle conditions the neural solver on the ground-truth $\\Delta t$ for each timestep. As discussed in **Section 3.1**, this is not a tractable approach, as the ground truth $\\Delta t$ are determined by the full solution and therefore are not known before the solution is computed. However, comparing the performance of ShockCast to the oracle model is of interest, as the neural CFL model is trained using the oracle $\\Delta t$ values. Therefore, the oracle represents an upper bound on achievable performance. The mean prediction model is more viable than the oracle and a simpler alternative to the neural CFL model. At each timestep, the mean prediction model predicts the mean $\\Delta t$ computed from the training data, independent of the current flow state $u(t)$. \n\n> We present results for the oracle (GT $\\Delta t$) and mean prediction (Mean $\\Delta t$) models compared to ShockCast using a U-Net backbone with time-conditioned layer norm in **Figures 27 and 28**. In both settings, we observe that the mean model performs substantially worse than ShockCast. This is likely because the predicted $\\Delta t$ for the mean prediction model is independent of the current flow state $u(t)$, despite the dependence between these variables observed in **Figure 13**. This results in the mean timestep size $\\bar\\Delta t$ and current flow state $u(t)$ being an out-of-distribution input pair for the neural solver. We additionally observe that ShockCast achieves performance close to its upper bound in the oracle model. We provide comprehensive comparisons of ShockCast to the oracle model with various neural solver backbones and conditioning methods in **Tables 6 and 7**."
+      }
+    },
+    "id": "0VzbtmJyhe",
+    "forum": "d4gzLgGl7I",
+    "replyto": "QxEJdpR9AG",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18704/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18704/Authors"
+    ],
+    "number": 13,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18704/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764367586743,
+    "cdate": 1764367586743,
+    "tmdate": 1764535189020,
+    "mdate": 1764535189020,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "comment": {
+        "value": "## Neural CFL Ablation (2/3)\n\n### **1. Timesteps are not known before computing the solution**\n\nGiven a neural solver $\\phi$ trained using a dataset of onestep pairs with inputs $({u}(t),\\Delta t)$ and targets ${u}(t+\\Delta t)$, we first introduce an approach that we refer to as **the oracle** for producing the PDE solution at inference time **without the neural CFL model** by using the ground truth timesteps. Consider the evaluation trajectory \n\n$$\\{(u(0),\\Delta t_0), (u(t_1), \\Delta t_1), \\ldots\\},$$\n\nwhere $\\Delta t_i:=t_{i+1}-t_i$. Then, the oracle does the following:\n\n1. Starting from $u(0)$, use $\\Delta t_0$ to predict $\\hat u(t_1)=\\phi(u(0),\\Delta t_0)$\n2. Use $\\hat u(t_1)$ and $\\Delta t_1$ to map to $\\hat u(t_2)=\\phi(\\hat u(t_1),\\Delta t_1)$\n\nBecause $\\Delta t_1$ depends on the (unknown) ground-truth $u(t_1)$, it cannot be computed before the solution is obtained, making the oracle baseline infeasible in practice.\n\n### **2. The CFL condition does not apply to spatially and temporally coarsened data**\n\nInstead of using the ground truth $\\Delta t_1$, one alternative approach could be to apply the CFL condition to $u(t_1)$ to obtain $\\Delta t_1$. However, neural solvers are trained on temporally coarsened data. Specifically, given a classical solver solution, we select every $J$-th step, e.g., $J=100$ in our circular blast case. This means that there are 99 CFD states between $u(t_1)$ and $u(t_2)$, with the timestep between each of these states determined using the CFL condition such that $\\Delta t_1$ is actually the sum of 100 smaller timesteps. Applying the CFL condition to $u(t_1)$ will lead to a predicted  $\\hat\\Delta t_1$ that is on the order of 100 times smaller than the true $\\Delta t_1$. \n\nAdditionally, the CFL condition relies on the spacing of the spatial discretization, although ML CFD datasets apply spatial coarsening. It also requires specific field variables (e.g., temperature, sound speed), while neural solvers often model only a subset of these quantities. The latter two points result in greater misalignment when attempting to apply the CFL condition to $\\hat u(t_1)$, which is likely to be more spatially coarse than the data during the generation process and may not even contain all of the fields needed to compute the condition.   \n\n### **3. Timesteps must align with the timestep distribution seen during training**\n\nBecause the neural solver is trained with coarsened timesteps that are roughly two orders of magnitude larger than the CFL-derived $\\hat\\Delta t_1$, the inputs $(u(t_1), \\hat\\Delta t_1)$ fall far outside the timestep range the solver was trained on, leading to worse performance. Therefore, we need a neural CFL model to map from our predicted $\\hat u(t_1)$ to a step size $\\hat \\Delta t$ which is close to the step sizes taken in the training data for states similar to $\\hat u(t_1)$ such that the pair $(\\hat u(t_1),\\hat \\Delta t)$ is not OOD for the neural solver. This addresses the following point from the reviewer:\n\n> *If the two-phases modeling is usefull, the predicted ∆t from Phase one is inherently impossible for it to perfectly match the true ∆t (based on a continuous value space) . In this case, what is the significance of designing the Phase one?*\n\nWe do not require $\\hat\\Delta t_1$ to perfectly match the ground truth; it only needs to fall within the correct regime so that $(u(t_1), \\hat\\Delta t_1)$ remains in-distribution for the neural solver. The neural CFL model instead serves to ensure that the pair $(\\hat u(t_1),\\hat \\Delta t)$ are in the distribution of the training data. Additionally, for the following reviewer point:\n\n> *If the ∆t distribution is known in training data, why we need the two-phases modeling?*\n\nThe step sizes $\\Delta t$ are a function of the flow state $u(t)$. To empirically demonstrate that this is the case, we have added **Figure 13** in **Appendix C.2** which shows that $\\Delta t$ varies substantially as a function of $t$ and $u(t)$. Therefore, it is not the marginal distribution of $\\Delta t$ that we are interested in, but the distribution conditional on $u(t)$. We furthermore experimentally validate this with a **Mean Prediction model**, which replaces the neural CFL model by instead predicting every step as the mean step size $\\bar \\Delta t$ from the training data (i.e., the mean of the marginal distribution of $\\Delta t$). \n\nWe have added an ablation on the neural CFL model comparing it to the oracle and the mean prediction model in **Appendix I**:"
+      }
+    },
+    "id": "1dXICFKHqL",
+    "forum": "d4gzLgGl7I",
+    "replyto": "vwZPJyNtGA",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18704/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18704/Authors"
+    ],
+    "number": 7,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18704/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764365669537,
+    "cdate": 1764365669537,
+    "tmdate": 1764532928765,
+    "mdate": 1764532928765,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "comment": {
+        "value": "## Computational Savings \n\n> *How much computational speedup or advantage (vs. one-phase modeling with time variable inputs) is achieved in practice?*\n\nThe *one-phase modeling with time-variable inputs* mentioned by the reviewer refers to our oracle model in the **Neural CFL Ablation** section above. The oracle model will be faster than ShockCast, as it does not include a neural CFL model. However, as we have discussed above, the oracle is not a feasible solution due to its use of ground truth timesteps.  \n\n> *No efficiency or stability analysis – The core motivation of adaptive stepping (e.g., computational savings or others) is never quantified; no wall-clock or rollout stability plots of flow evolution.*\n\nWe have added rollout stability analyses to our paper, as described in the section **Rollout Stability** above. Additionally, we agree with the reviewer's point that the manuscript was missing an analysis of computational advantages of our framework, and thus, we have added a runtime comparison of ShockCast to the classical solver in **Appendix C.5**:\n\n> We compare the runtime of the classical solver to ShockCast with the F-FNO neural solver backbone using affine timestep conditioning following the best practices described  in McGreivy & Hakim (2024). Specifically, we report both GPU and CPU runtimes for ShockCast, and additionally report both high-fidelity and low-fidelity runtimes for the classical solver. The high-fidelity classical solver refers to the use of the original solver settings, while low-fidelity uses a setting that trades off a degree of accuracy comparable to the neural solver error for increased efficiency. We compare using a circular blast case from the test set with initial pressure ratio $47.575$. The low fidelity solver is achieved by removing the finest level of the mesh. Times are shown in **Figure 15**, while per-step errors relative to the high-fidelity solution are shown in **Figure 16**. The high fidelity, low fidelity, and neural solutions are visualized in **Figure 17**.\n\nMcGreivy, Nick, and Ammar Hakim. \"Weak baselines and reporting biases lead to overoptimism in machine learning for fluid-related partial differential equations.\" Nature machine intelligence 6.10 (2024): 1256-1269."
+      }
+    },
+    "id": "A7f1zFPOLt",
+    "forum": "d4gzLgGl7I",
+    "replyto": "DInLT556Rr",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18704/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18704/Authors"
+    ],
+    "number": 17,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18704/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764532226726,
+    "cdate": 1764532226726,
+    "tmdate": 1764532226726,
+    "mdate": 1764532226726,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "comment": {
+        "value": "We thank the reviewers for their constructive feedback and suggestions which have served to improve the paper. We have added a series of new experiments and analyses in our revised paper which we have summarized below.\n\n## New Datasets\n\nWe have generated the following new datasets in response to reviewer feedback to thoroughly evaluate ShockCast: \n\n1. **Airfoil Shock**: shock-airfoil interaction dataset to assess performance on a non-uniform mesh with a non-regular domain. (*Reviewer Ssu2, Reviewer WzPk*)\n2. **Spherical Blast**: extension of circular blast dataset to assess performance in three spatial dimensions (*Reviewer Ssu2, Reviewer WzPk*)\n3. **Long Circular Blast**: extension of circular blast dataset to assess stability over long time integration periods (*Reviewer Ssu2, Reviewer WzPk*)\n4. **Hypersonic Airfoil Shock**: extension of airfoil shock dataset to assess performance with Mach > 5 (*Reviewer WzPk*)\n\nResults on each of these datasets are added to the latest version of our paper.\n \n---\n## New Analyses\n\nIn addition to the results on the new datasets, we have added the following new analyses:\n1. **Neural CFL Ablation Study**: Comparison of performance of ShockCast using neural CFL model vs oracle model vs mean prediction model (*Reviewer WzPk, Reviewer b48r*)\n2. **Runtime comparison**: wall-clock comparison of ShockCast vs. the classical solver and a low-fidelity classical baseline (*Reviewer WzPk, Reviewer Ssu2, Reviewer 1474*)\n2. **Mass Conservation Analysis**: analysis of predictions to assess physical consistency in terms of mass conservation (*Reviewer WzPk*)\n3. **Neural CFL Feature Importance Analysis**: sensitivity study measuring how perturbing each input feature affects timestep predictions (*Reviewer Ssu2*)\n---\nWe hope these additions fully address the reviewers’ concerns, and we thank them again for their valuable insights."
+      }
+    },
+    "id": "A9J5Av9lJr",
+    "forum": "d4gzLgGl7I",
+    "replyto": "d4gzLgGl7I",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18704/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18704/Authors"
+    ],
+    "number": 16,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18704/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764372503453,
+    "cdate": 1764372503453,
+    "tmdate": 1764529181630,
+    "mdate": 1764529181630,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "comment": {
+        "value": "We thank the reviewer for their thoughtful suggestions and constructive feedback, which have helped strengthen the paper. We have added several new experiments and analyses aimed at addressing the reviewer’s concerns.\n\n## Additional Evaluation Settings\n\n> *1.Evaluated only on two synthetic datasets (spherical blast & coal dust explosion)*\n\n> *3.The proposed component is not sufficiently validated.*\n\nIn the following sections, we detail the following new experiments and analyses we have conducted in response to the reviewer's feedback:\n\n1. **Airfoil Shock**: new dataset and experiments to assess performance on a non-uniform mesh with a non-regular domain\n2. **Spherical Blast**: new dataset and experiments to assess performance in three spatial dimensions\n3. **Long Circular Blast**: new dataset and experiments to assess stability over long time integration periods\n4. **Classical Solver Runtime Comparison**: a best practices comparison of ShockCast to the classical solver\n5. **Neural CFL Feature Importance Analysis**: analysis of sensitivity of neural CFL predictions in response to perturbations of varying degrees to each feature.\n\n## Unstructured meshes and 3D flows\n\n> *4.Does ShockCast generalize to unstructured meshes or three-dimensional (3D) flows?*\n\nUnstructured meshes necessitate the use of GNN-based backbones for the neural solver and neural CFL modules in ShockCast. To assess the GNN variant of ShockCast, we have added a new Airfoil Shock setting featuring an irregular domain, discussed in Section 5:\n\n>  **Airfoil Shock.** The third setting we consider is a shock-airfoil interaction problem involving a NACA 0012 airfoil immersed in a compressible flow. We initialize a normal shock inside the domain and vary its initial strength between Mach numbers $1.2$ and $2.1$. In addition, we vary the angle of attack of the airfoil between $\\pm 8^\\circ$, yielding a total of $100$ cases with $90$ used for training and $10$ for evaluation. Once the simulation begins, the shock travels from left to right and impinges on the airfoil, generating strong compression on the windward side followed by shock reflections and downstream vortical structures. The complexity of the flow increases with both the shock strength and the angle of attack. The irregularity of the airfoil geometry allows us to evaluate ShockCast beyond regular domains with uniform discretizations. \n\n>  Finally, for the Airfoil Shock settings, we experiment with MeshGraphNets (MGN) (Pfaff et al., 2021) and Diffusion Graph Nets (DGN) from Valencia et al. (2025), which is based on the Graph U-Net (Lino et al., 2022; Gao & Ji, 2019). Both GNN architectures use affine timestep conditioning.\n\n> Finally, we compare ShockCast with MGN and DGN neural solver backbones in **Figure 8b**, where we find MGN to be more performant in terms of correlation time and mean flow error. We visualize ShockCast predictions for a test airfoil case in **Figure 9**. \n\nWe provide more details on the airfoil shock data in **Appendix A.4**, and more details on the neural solvers and the neural CFL models used for the GNN variant of ShockCast in **Appendix B**.\n\nWe have also added experiments on a newly-generated 3D flow dataset extending the circular blast setting to three spatial dimensions in **Section 5**:\n\n> To assess the scalability of ShockCast to three spatial dimensions, we additionally generate and evaluate on an extension of this setting to a Spherical Blast.\n\n> In **Figure 7**, we visualize unrolled predictions for a spherical blast case using a 3D U-Net neural solver backbone with time-conditioned layer norm and 3D ConvNeXt neural CFL backbone.\n\nWe provide more details on the spherical blast data in **Appendix A.3**."
+      }
+    },
+    "id": "BrtRWlYWtN",
+    "forum": "d4gzLgGl7I",
+    "replyto": "f97a8N0Qmb",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18704/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18704/Authors"
+    ],
+    "number": 9,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18704/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764366426415,
+    "cdate": 1764366426415,
+    "tmdate": 1764820319066,
+    "mdate": 1764820319066,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "comment": {
+        "value": "## Neural CFL Ablation (3/3)\n\n> In this section, we evaluate and ablate the neural CFL module in ShockCast by replacing it with two alternatives: an oracle model and a mean prediction model. The oracle conditions the neural solver on the ground-truth $\\Delta t$ for each timestep. As discussed in **Section 3.1**, this is not a tractable approach, as the ground truth $\\Delta t$ are determined by the full solution and therefore are not known before the solution is computed. However, comparing the performance of ShockCast to the oracle model is of interest, as the neural CFL model is trained using the oracle $\\Delta t$ values. Therefore, the oracle represents an upper bound on achievable performance. The mean prediction model is more viable than the oracle and a simpler alternative to the neural CFL model. At each timestep, the mean prediction model predicts the mean $\\Delta t$ computed from the training data, independent of the current flow state $u(t)$. \n\n> We present results for the oracle (GT $\\Delta t$) and mean prediction (Mean $\\Delta t$) models compared to ShockCast using a U-Net backbone with time-conditioned layer norm in **Figures 27 and 28**. In both settings, we observe that the mean model performs substantially worse than ShockCast. This is likely because the predicted $\\Delta t$ for the mean prediction model is independent of the current flow state $u(t)$, despite the dependence between these variables observed in **Figure 13**. This results in the mean timestep size $\\bar\\Delta t$ and current flow state $u(t)$ being an out-of-distribution input pair for the neural solver. We additionally observe that ShockCast achieves performance close to its upper bound in the oracle model. We provide comprehensive comparisons of ShockCast to the oracle model with various neural solver backbones and conditioning methods in **Tables 6 and 7**.\n\n## Prior works\n\n> *Over-claimed novelty – Prior works (e.g., continuous-time neural solvers, time-conditioned FNOs, and physics-aware operator networks) already include similar temporal adaptivity ideas; Also many works for supersonic/hypersonic flow modeling (not the first machine learning framework).*\n\nIn **Section 4**, we have discussed the relation of our work to existing methods for time-conditioned and time-continuous neural solvers:\n\n> However, to the best of our knowledge, we are the first to consider learning to temporally re-mesh by utilizing data with adaptable temporal resolution, which is vital for developing models for high-speed flows.\n\nAdditionally, we revised the following statements: \n\nAbstract:\n\n> ~~As ShockCast is the first framework for learning high-speed flows, we~~*We* evaluate our methods by generating three supersonic flow datasets.\n\nSection 1:\n\n> We therefore develop ShockCast, ~~the first~~ *a* machine learning framework ~~(to the best of our knowledge)~~ for temporally-adaptive modeling of high-speed flows.\n\n> Our work ~~represents the first~~ *takes* steps towards developing machine learning models for high-speed flows, where there is great potential for neural acceleration due to the immense computational requirements of classical methods.\n\nSection 4:\n\n> However, to the best of our knowledge, we are the first to consider learning to temporally re-mesh ~~and utilize~~ *by utilizing* data with adaptable temporal resolution, which ~~are both~~*is* vital for developing models for high-speed flows.\n\n\nSection 6:\n\n> Our work ~~represents the first~~ *takes* steps towards developing machine learning models for high-speed flows, where there is great potential for neural acceleration due to the immense computational requirements of classical methods."
+      }
+    },
+    "id": "DInLT556Rr",
+    "forum": "d4gzLgGl7I",
+    "replyto": "vwZPJyNtGA",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18704/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18704/Authors"
+    ],
+    "number": 8,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18704/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764365968548,
+    "cdate": 1764365968548,
+    "tmdate": 1764821077636,
+    "mdate": 1764821077636,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "comment": {
+        "value": "## Stability Analysis\n\n> *3.Small errors in $\\Delta t$ prediction may compound during autoregressive rollout. How does ShockCast handle stability over long simulations?*\n\n> *5.The paper lacks an analysis of error accumulation beyond 100 autoregressive steps.*\n\nWe have added experiments on a newly-generated long version of the circular blast setting with more than 100 unrolling steps per trajectory in Section 5:\n\n> We additionally assess the stability of ShockCast across many time integrations by generating an alternative extension of this setting to Long Circular Blast by more than doubling the length of the simulation, resulting in trajectories with more than 100 unrolling steps.\n\n> In **Figure 8a**, we present results for the long circular blast setting for U-Net and F-FNO neural solver backbones with time-conditioned layer norm. The solutions remain correlated above 0.9 for approximately half of the simulation time, and the low TKE and mean flow errors demonstrate that the predicted solutions remain stable and in-distribution, which is further supported by the rollout visualizations shown in **Appendix H**. \n\nIn **Appendix H**, we have added rollout stability plots:\n\n> In this section, we analyze performance of ShockCast in the long circular blast setting with a U-Net backbone. The rollout error over time is visualized in **Figure 22**. Although the solution predicted by ShockCast has a larger relative error as more steps are taken, the rollout visualizations in **Figures 23 to 26** show that predictions remain stable and in the distribution of solutions.\n\n## Runtime Comparison \n\n> *Training neural CFL + solver may still be expensive compared to classical adaptive methods.*\n\n> *7.Please specify the computational costs of the proposed methods and the actual speedup achieved compared to numerical simulations.*\n\nWe have added a runtime comparison of ShockCast to the classical solver in Appendix C.5:\n\n> We compare the runtime of the classical solver to ShockCast with the F-FNO neural solver backbone using affine timestep conditioning following the best practices described  in McGreivy & Hakim (2024). Specifically, we report both GPU and CPU runtimes for ShockCast, and additionally report both high-fidelity and low-fidelity runtimes for the classical solver. The high-fidelity classical solver refers to the use of the original solver settings, while low-fidelity uses a setting that trades off a degree of accuracy comparable to the neural solver error for increased efficiency. We compare using a circular blast case from the test set with initial pressure ratio $47.575$. The low fidelity solver is achieved by removing the finest level of the mesh. Times are shown in **Figure 15**, while per-step errors relative to the high-fidelity solution are shown in **Figure 16**. The high fidelity, low fidelity, and neural solutions are visualized in **Figure 17**.\n\nMcGreivy, Nick, and Ammar Hakim. \"Weak baselines and reporting biases lead to overoptimism in machine learning for fluid-related partial differential equations.\" Nature machine intelligence 6.10 (2024): 1256-1269.\n\n## Data Efficiency\n\n> *2.Be overly dependent on data.*\n\nShockCast uses a comparable amount of data to other data-driven neural solvers. To demonstrate this, we have added a visualization of the distribution of the number of timesteps per solution in **Figure 14** of **Appendix C.2**. All datasets have 90 or fewer training solutions, each with 70 or fewer timesteps, putting an upper bound of $6,300$ on the number of onestep targets, which is within the typical range used by existing neural solvers.\n\n> *6.The requirement for high-fidelity solver data for training may be prohibitive for certain users.*\n\nShockCast is generally applicable to any setting where adaptive timestepping is used, and is independent of the fidelity of the solver used to generate the data. Additionally, ShockCast does not require the original solver resolution and is compatible with downsampled data, as we demonstrate in our experiments on temporally and spatially coarsened datasets."
+      }
+    },
+    "id": "DV6zkRFMMI",
+    "forum": "d4gzLgGl7I",
+    "replyto": "f97a8N0Qmb",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18704/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18704/Authors"
+    ],
+    "number": 10,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18704/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764366533282,
+    "cdate": 1764366533282,
+    "tmdate": 1764366803651,
+    "mdate": 1764366803651,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "summary": {
+        "value": "The paper received mixed opinions from four reviewers. Here is a summary of the major concerns from the reviewers:\n\n1) Reviewers mentioned that the current validations on two synthetic datasets were insufficient and questioned the method’s efficacy on real-world scenarios, unstructured meshes, and 3D scenes.\n\n2) Multiple reviewers questioned the model’s performance (e.g., computational cost and speedup), especially when compared with classical methods in numerical simulation.\n\n3) The technical novelty over both numerical solvers and machine learning solvers needs further clarification.\n\n4) Several reviewers noted that the method contains some complicated designs and requested further justification.\n\nNotes on AI usage: the authors raised concerns about reviewer Ssu2, who gave the lowest score (2). The authors cited evidence from AI-detection websites indicating that their review was likely generated by AI. I have checked all four reviews with GPTZero, which indicated that Ssu2 (who gave 2, the lowest score) and 1474 (who gave 8, the highest score) are both very likely to be AI-generated. Below are the full results from my run of GPTZero:\n\n- Reviewer Ssu2 (score 2): “We are highly confident this text was AI generated.”\n- Reviewer 1474 (score 8): “We are highly confident this text was AI generated.”\n- Reviewer WzPk (score 4): “We are uncertain about this document. If we had to classify it, it would likely be considered human.”\n- Reviewer b48r (score 6): “We are highly confident this text is entirely human.”\n\nI would like to add that whether a review was AI-generated is only one of many factors (e.g., the paper itself, the technical opinions expressed in each review, reviewers’ confidence and technical competence, and so on) that influence my meta-review's judgment."
+      },
+      "reviewer_concerns": {
+        "value": "The rebuttal has responded to each concern:\n\n1) The rebuttal reported additional experiments covering 3D scenes and unstructured meshes. The GNN variant of ShockCast that accommodates unstructured meshes is respectable, and the baseline choice (MeshGraphNet) is classic. Overall, I think the new experiments are sufficient to address this concern.\n\n2) The rebuttal added three figures (Figs. 15-17) to report the time cost and error analysis of their model and classic simulators on CPUs/GPUs. Comparing network models with classic solvers is usually non-trivial and requires careful alignment of their computational budgets on hardware platforms. After reading these figures and the relevant text, I think this response has only partially addressed the concern, as the comparison's context is not sufficiently detailed for readers to determine whether it is fair.\n\n3) The rebuttal has re-positioned the paper in the ML community and chose to tone down some bold claims in the original manuscript. The revised claims are more convincing, which I think can pacify the reviewers in doubt.\n\n4) The rebuttal explained the reasons behind the Mixture of Experts (MoE) performance-complexity tradeoff and behind the two-phase design. I have found that most of the detailed justifications in the authors’ response to Reviewer WzPk are reasonable, and I will consider this issue largely resolved."
+      },
+      "reviewer_scores": {
+        "value": "This seems to be a borderline paper in many ways, and the reviewers’ opinions are polarized.\n\nFrom what I read, the two positive reviewers (6 and 8) did not raise critical concerns regarding the paper’s technical quality. I think they would have remained positive had they been able to discuss the rebuttal.\n\nThe most negative reviewer (2) raised specific questions primarily on the technical methodology and the evaluations. In my opinion, some of these evaluations are helpful but not mandatory for improving the paper, and the rebuttal has reported a reasonable amount of additional experiments to justify their claims. Given the modest confidence in this review and its relatively vague descriptions of the weaknesses, I think the reviewer may possibly be persuaded to become a borderline supporter.\n\nI think it is hard to predict the borderline-negative reviewer (4). On one hand, for some of their concerns, I think it is easy to check whether the rebuttal has properly addressed them, e.g., higher-Mach or 3D cases. On the other hand, I feel questions about over-claimed novelty or model complexity are difficult to judge by objective standards. This reviewer is also very confident (5, absolutely certain). Weighing all these factors, I think the reviewer would likely maintain a borderline score.\n\nOverall, I think it is more likely that the four reviewers would accept this paper than reject it if they could participate fully in the discussion."
+      }
+    },
+    "id": "FGDlkdJDsn",
+    "forum": "d4gzLgGl7I",
+    "replyto": "d4gzLgGl7I",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18704/Area_Chair_SnN3"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18704/Senior_Area_Chairs",
+      "ICLR.cc/2026/Conference/Submission18704/Area_Chair_SnN3"
+    ],
+    "number": 1,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18704/-/Meta_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1767607609963,
+    "cdate": 1767607609963,
+    "tmdate": 1770619627590,
+    "mdate": 1770619627590,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Meta_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "summary": {
+        "value": "This paper, ShockCast, proposes a novel two-phase deep learning framework for adaptive time-stepping in high-speed flow modeling (e.g., supersonic and hypersonic regimes). High-speed flows exhibit transient sharp gradients (shocks) requiring dynamic adjustment of the timestep size (Δt) using the Courant-Friedrichs-Lewy (CFL) condition, which is computationally expensive for classical solvers.\n\nShockCast addresses this by decomposing the task:\n\nNeural CFL Phase ($\\psi$): A ConvNeXt backbone predicts the optimal, large timestep $\\Delta t$ based on the current flow state. This module is trained to emulate the $\\Delta t$ choices from the classical solver used for data generation, circumventing issues caused by coarse computational meshes.\n\nNeural Solver Phase ($\\phi$): The flow state is evolved by the predicted $\\hat{\\Delta}t$. The authors introduce three novel timestep conditioning strategies for various neural solver backbones (F-FNO, U-Net, CNO, Transolver): Euler Residuals, Mixture of Experts (MoE), and Affine/Spatial-Spectral Conditioning.\n\nThe framework is evaluated on two new supersonic flow datasets—Coal Dust Explosion (multiphase) and Circular Blast (single-phase)—and achieves strong performance in accurately predicting both instantaneous fields and integrated physical quantities (TKE and Mean Flow)."
+      },
+      "soundness": {
+        "value": 4
+      },
+      "presentation": {
+        "value": 3
+      },
+      "contribution": {
+        "value": 3
+      },
+      "strengths": {
+        "value": "Improved Training Objective for Transient Dynamics: The core motivation is strong: adaptive time-stepping naturally balances the training objective by inversely scaling $\\Delta t$ according to the rate of change. This more evenly distributes the learning difficulty across states with smooth and sharp gradients (i.e., shocks), a highly pertinent consideration for high-speed flows.\n\n\nPhysically-Informed Neural CFL Model: The Neural CFL phase successfully emulates the true adaptive time mesh, as shown by the close match between predicted and true $\\Delta t$ during autoregressive rollout. Furthermore, incorporating physically-motivated inputs like spatial gradients ($\\nabla u$) and CFL features substantially improves the $\\Delta t$ prediction accuracy for the complex multiphase Coal Dust Explosion scenario\n\n\nNovel and Effective Conditioning Strategies: The introduction of Euler Residuals and Mixture of Experts (MoE) as timestep conditioning strategies is technically insightful. The results demonstrate that these methods are highly competitive, achieving the lowest TKE error for the Circular Blast (F-FNO backbone with MoE/Euler) and best Mean Flow/TKE performance for the Coal Dust Explosion (U-Net backbone with MoE/Euler)"
+      },
+      "weaknesses": {
+        "value": "1. Missing Quantification of Speedup: The paper's primary motivation is the immense computational cost of classical high-speed flow solvers. However, the results section fails to quantify the final speedup achieved by the full ShockCast pipeline (inference runtime) relative to the original classical solver. Without this figure, the practical utility of the entire framework remains unproven. (Only the classical solver runtime is given in Table 5, min: $\\sim 15$K seconds, mean: $\\sim 67$K seconds)\n\n2. Complexity of MoE Implementation: The MoE conditioning significantly increases peak training memory (e.g., F-FNO: $18.9$ GiB (Affine) vs. $37.2$ GiB (MoE); Transolver: $41.8$ GiB (Affine) vs. $62.4$ GiB (MoE))9. While the complexity is offset by reducing the latent dimension for some models, the substantial jump in memory requirement suggests that the MoE approach is challenging to implement and scale, requiring clarification on the trade-off."
+      },
+      "questions": {
+        "value": "Missing Speedup Quantification: The core justification is computational efficiency, yet the paper fails to state the final speedup factor (e.g., $1000\\times$) of ShockCast relative to the original classical solver runtime (which can take tens of thousands of seconds). This critical number must be explicitly provided\n\n\nrade-Off for MoE Complexity: The Mixture of Experts (MoE) component, while showing excellent results, dramatically increases memory consumption (e.g., up to $\\sim 62$ GiB)14. The efficiency/performance trade-off needs deeper analysis, as the simpler Euler Residuals or Affine methods often perform comparably"
+      },
+      "flag_for_ethics_review": {
+        "value": [
+          "No ethics review needed."
+        ]
+      },
+      "rating": {
+        "value": 8
+      },
+      "confidence": {
+        "value": 4
+      },
+      "code_of_conduct": {
+        "value": "Yes"
+      }
+    },
+    "id": "GElBmFxqsd",
+    "forum": "d4gzLgGl7I",
+    "replyto": "d4gzLgGl7I",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18704/Reviewer_1474"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18704/Reviewer_1474"
+    ],
+    "number": 3,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18704/-/Official_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1761524711085,
+    "cdate": 1761524711085,
+    "tmdate": 1762928404298,
+    "mdate": 1762928404298,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "comment": {
+        "value": "## Initial Conditions\n\n> *1.How were the initial conditions (e.g., Mach numbers, pressure ratios) for the datasets chosen?*\n\nThe initial conditions are randomly sampled from physically meaningful ranges, which we detail further in **Appendix C.1**. We've additionally added a visualization of the distribution of solution parameters in **Figure 12** of **Appendix C.2**.\n\n>  Are they representative of real-world scenarios?\n\nYes, the parameter ranges were chosen so as to produce high-speed flow regimes commonly used in CFD to study small timescale phenomena such as shock waves, expansion fans, and compressibility effects. Standard benchmarks for evaluating classical solvers often include these settings, and they are closely related to real-world applications of CFD: \n\n1. **Coal Dust Explosion**: modeling shock-particle interactions relevant in industrial safety/ controlled blasting.\n2. **Circular Blast**: capturing outward-propagating shock fronts studied in blast-wave mitigation, explosive engineering, and impact modeling.\n3. **Airfoil Shock**: designing components for aerospace vehicles, such as developing wings that minimize drag and maximize lift under a variety of operating conditions.\n\n## Neural CFL Feature Importance Analysis\n\n> *2.Can you visualize/analyze which features (e.g., velocity gradients, sound speed) most influence the predicted $\\Delta t$?* \n\nWe have added a feature importance analysis for the Neural CFL model in **Appendix I**:\n\n> To assess the degree to which each of the input features to the neural CFL model influence predictions, we conduct a feature importance analysis by progressively corrupting each feature in the coal dust explosion setting. We analyze the effect this perturbation has by measuring the Mean Absolute Normalized Error, defined as\n        $$\n        \\frac{|\\Delta-\\hat\\Delta|}{\\sigma_\\Delta},\n        $$\n        where $\\Delta$ and $\\hat\\Delta$ are the ground truth and predicted timesteps, and $\\sigma_\\Delta$ is the standard deviation of the timestep sizes over the training data. We corrupt inputs by applying dropout of increasing levels one field at a time. Results are shown in **Figure 29**. As can be seen, the flow state $u(t)$ has the largest influence on predictions, followed by the partial derivative with respect to $y$. This is consistent with the physics of the coal dust explosion setting, in which the shock repeatedly reflects between the upper and lower channel boundaries, generating strong vertical gradients that require small timesteps to resolve as the shock approaches the upper or lower boundary."
+      }
+    },
+    "id": "M4bvjjmZ5R",
+    "forum": "d4gzLgGl7I",
+    "replyto": "f97a8N0Qmb",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18704/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18704/Authors"
+    ],
+    "number": 11,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18704/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764366925835,
+    "cdate": 1764366925835,
+    "tmdate": 1764534094984,
+    "mdate": 1764534094984,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "title": {
+        "value": "Paper Decision"
+      },
+      "decision": {
+        "value": "Accept (Poster)"
+      },
+      "comment": {
+        "value": ""
+      }
+    },
+    "id": "NsKqKnYJKc",
+    "forum": "d4gzLgGl7I",
+    "replyto": "d4gzLgGl7I",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Program_Chairs"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Program_Chairs"
+    ],
+    "number": 1,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18704/-/Decision",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1769417351828,
+    "cdate": 1769417351828,
+    "tmdate": 1770356078342,
+    "mdate": 1770356078342,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Decision",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "summary": {
+        "value": "This paper proposes using an ML model to predict time steps for fluid simulations that use adaptive time steps.  It then uses those timesteps in an autoregressive fashion to solve compressible flow problems with a neural solver."
+      },
+      "soundness": {
+        "value": 3
+      },
+      "presentation": {
+        "value": 2
+      },
+      "contribution": {
+        "value": 3
+      },
+      "strengths": {
+        "value": "- The paper makes an interesting observation that when using a neural PDE solver, you can't necessarily rely on the CFL number computed on the fine computational mesh used for the simulation, because the neural model will effectively downsample the mesh inside the network, and so the adaptive time step chosen should be on that coarser scale.\n- The numerical experiments seem convincing to me of the utility of the proposed method."
+      },
+      "weaknesses": {
+        "value": "- I think \"Our work represents the first steps towards developing machine learning models for high-speed flows\" is a bit of an inflated statement that could be toned down.\n- Although it's a fair point that a neural solver will have a different internal grid resolution than what is used for the PDE outside the network, presumably one knows what is the architecture they're dealing with and what that coarse grid resolution is.  Why not just compute an adaptive time step - classically - using that coarser scale (which should be known from looking at the network architecture you choose) and eschewing the proposed neural CFL predictor?\n- If the answer to the above is \"you could do either, but neural CFL predictor is faster while still just as accurate,\" can we see a study on that?"
+      },
+      "questions": {
+        "value": "- It's probably worth making the connection in the into that adaptive time stepping is not some CFD-specific thing - it is core to ML as well, e.g. \"adaptive learning rates\" with SGD/Adam/etc.\n- Probably also worth noting in the intro that the problem with adaptive time stepping is more extreme than what you describe - if you don't have good timesteps, not only will you miss fine-scale flow phenomena, but your simulation will just crash due to predicting negative pressures etc. - before the solution ever has a chance to diverge - see e.g. Patkar et al., \"Towards positivity preservation for monolithic two-way solid–fluid coupling\" (in particular the issue of positivity preservation that is highlighted - even for relatively low-Mach flows)\n- In 2.3, since you are interested in CFD/engineering, it may be worth noting that methods like PINNs are not convergent (they are, in their vanilla versions at least, one-shot predictors of the solution of a PDE, which can't be convergent).  Recent hybrid solver approaches like that of Kaneda et al., \"A deep conjugate direction method for iteratively solving linear systems\" use a neural network for preconditioning but use a classical solver loop to ensure convergence (that paper happens to be for incompressible flow, but same ideas for compressible flow systems)."
+      },
+      "flag_for_ethics_review": {
+        "value": [
+          "No ethics review needed."
+        ]
+      },
+      "rating": {
+        "value": 6
+      },
+      "confidence": {
+        "value": 4
+      },
+      "code_of_conduct": {
+        "value": "Yes"
+      }
+    },
+    "id": "QxEJdpR9AG",
+    "forum": "d4gzLgGl7I",
+    "replyto": "d4gzLgGl7I",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18704/Reviewer_b48r"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18704/Reviewer_b48r"
+    ],
+    "number": 1,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18704/-/Official_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1761395731740,
+    "cdate": 1761395731740,
+    "tmdate": 1762928407215,
+    "mdate": 1762928407215,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "comment": {
+        "value": "## Physical Compliance\n\n> *Conceptual shallowness: The so-called “Neural CFL” model merely regresses ∆t from local features; it does not derive from or guarantee compliance with the true CFL stability condition. There is no theoretical guarantee that predicted timesteps are stable or physically valid.*\n\nWhile our Stability Analyses above find that ShockCast predictions do eventually diverge from the ground truth, stability plots visually confirm that they remain in the distribution of solutions without unstable behavior. Although empirical, we suggest that these validations may be more practically useful than potential theoretical guarantees that current mathematical machinery allow for. Specifically, error bounds would not only require making assumptions on the functional class of the neural solver and neural CFL model, but also assumptions on the function space of the PDE solution data -- see, for example, Assumptions 9 and 10 in Section 8.3 of [1]. However, such assumptions may not be valid for turbulent and/or high-speed flows, where even determining the existence of smooth solutions remains an open problem.\n\n[1] Kovachki, Nikola, et al. \"Neural operator: Learning maps between function spaces with applications to pdes.\" Journal of Machine Learning Research 24.89 (2023): 1-97.\n\n\n> *Lack of physical consistency: The paper never checks conservation of mass, momentum, or energy, which is essential for high-Mach or compressible flows.*\n\n> *Can you demonstrate that ShockCast preserves key physical invariants or avoids divergence during long rollouts?*\n\nAlthough the chaotic nature of the flows we consider may lead to divergence of the predicted solution from the ground truth, our mean flow error and Turbulence Kinetic Energy error are used to assess the degree to which the predicted solutions statistically match the ground truth. We have also added an experiment on mass conservation in **Appendix G**: \n\n> We analyze the physical consistency of predictions made by ShockCast by examining mass conservation in the circular blast setting. As the boundaries for the blast case do not allow any fluid to enter or exit, the total mass should remain constant across time up to numerical precision. That is, the mass function $M(t):\\mathbb{R}\\mapsto\\mathbb{R}$ defined as\n        \\begin{equation*}\n            M(t)=\\int_\\Omega \\rho(x, t)dx\n        \\end{equation*}\n        should remain constant, where $\\Omega$ is the spatial domain and $\\rho$ is the density. To analyze the evolution of the mass function over time, we define the relative mass deviation as\n        \\begin{equation*}\n            \\frac{|M(t) - M(0)|}{|M(0)|},\n        \\end{equation*}\n        which is positive for $t>0$ if the mass has changed since the simulation started. As can be seen in **Figure 21**, ShockCast's predicted total mass stays within $0.2$% of $M(0)$. \n\n## Neural CFL Ablation (1/3)\n\n> *Method complexity vs. benefit – The two-phase design and multiple conditioning mechanisms add heavy machinery without showing clear improvement over a simpler time-conditioned baseline. Reporting a clear and full coparison (vs. graph-based methods, transformer-based methods, FNO-based methods, and etc. ) on one new table.*\n\n> *How much computational speedup or advantage (vs. one-phase modeling with time variable inputs) is achieved in practice?*\n\nThe reviewer’s proposed one-phase baseline (which we refer to as the \"oracle\" in our newly-added experiments) assumes that the timestep for each evaluation step is already known at inference time. However, as detailed in **Section 3.1** and below, because the timesteps are determined by the solution, they cannot be known ahead of time. Additionally, the timesteps during inference must be chosen in a way that aligns with training. Furthermore, due to coarsening of both space and time and the fact that we only model a subset of the CFD state variables, the CFL condition used during data generation cannot be used to predict the timestep size. In summary, these three points are the primary motivation for our two phase framework:\n\n1. Timesteps are not known before computing the solution\n2. The CFL condition does not apply to spatially and temporally coarsened data\n3. Timesteps must align with the timestep distribution seen during training\n\n\nWe detail each of these in **Section 3.1**, and have discussed each of them below."
+      }
+    },
+    "id": "ScEtMi9VsB",
+    "forum": "d4gzLgGl7I",
+    "replyto": "vwZPJyNtGA",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18704/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18704/Authors"
+    ],
+    "number": 6,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18704/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764365075511,
+    "cdate": 1764365075511,
+    "tmdate": 1764532620690,
+    "mdate": 1764532620690,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "comment": {
+        "value": "## Adaptivity in ML\n\n> *It's probably worth making the connection in the into that adaptive time stepping is not some CFD-specific thing - it is core to ML as well, e.g. \"adaptive learning rates\" with SGD/Adam/etc.*\n\nWe have added a discussion on the connection between adaptive time stepping and other ML methods in **Section 4**:\n\n> Adaptive time-stepping extends beyond PDE modeling applications in ML research, with connections to adaptive learning rates (Duchi et al., 2011; Tieleman, 2012; Kingma & Ba, 2015) and continuous-time generative models (Song et al., 2021; Lipman et al., 2023).\n\nDuchi, John, Elad Hazan, and Yoram Singer. \"Adaptive subgradient methods for online learning and stochastic optimization.\" Journal of machine learning research 12.7 (2011).\n\nTieleman, Tijmen. \"Lecture 6.5‐rmsprop: Divide the gradient by a running average of its recent magnitude.\" COURSERA: Neural networks for machine learning 4.2 (2012): 26.\n\nKingma, Diederik P. \"Adam: A method for stochastic optimization.\" arXiv preprint arXiv:1412.6980 (2014).\n\nSong, Yang, et al. \"Score-Based Generative Modeling through Stochastic Differential Equations.\" International Conference on Learning Representations, 2021.\n\nYaron Lipman, Ricky T. Q. Chen, Heli Ben-Hamu, Maximilian Nickel, and Matthew Le. Flow matching for generative modeling. In The Eleventh International Conference on Learning Representations, 2023. \n\n## Nonphysical PDE Solutions\n\n> *Probably also worth noting in the intro that the problem with adaptive time stepping is more extreme than what you describe - if you don't have good timesteps, not only will you miss fine-scale flow phenomena, but your simulation will just crash due to predicting negative pressures etc. - before the solution ever has a chance to diverge - see e.g. Patkar et al., \"Towards positivity preservation for monolithic two-way solid–fluid coupling\" (in particular the issue of positivity preservation that is highlighted - even for relatively low-Mach flows)*\n\nThank you for this reference. We have added the following discussion of the effects of poorly-chosen step sizes in **Section 2.2**:\n\n> When $u(t)$ is changing rapidly, or more formally, when $\\lVert\\partial_t u(t)\\rVert$ grows large, too large $\\Delta t$ can lead to divergence of the numerical solution (Anderson, 2023) or nonphysical solutions containing negative densities or pressures (Patkar et al., 2016).\n\nJohn D. Anderson. Fundamentals of Aerodynamics. McGraw Hill, New York, 7th edition, 2023.\n\nPatkar, Saket, et al. \"Towards positivity preservation for monolithic two-way solid–fluid coupling.\" Journal of Computational Physics 312 (2016): 82-114.\n\n## Hybrid Solvers\n\n> *In 2.3, since you are interested in CFD/engineering, it may be worth noting that methods like PINNs are not convergent (they are, in their vanilla versions at least, one-shot predictors of the solution of a PDE, which can't be convergent). Recent hybrid solver approaches like that of Kaneda et al., \"A deep conjugate direction method for iteratively solving linear systems\" use a neural network for preconditioning but use a classical solver loop to ensure convergence (that paper happens to be for incompressible flow, but same ideas for compressible flow systems).*\n\nWe have added the following discussion of hybrid solvers to **Section 2.3**:\n\n> Various approaches have emerged over the last decade, including Physics-Informed Neural Networks (Raissi et al., 2019), hybrid solvers (Kochkov et al., 2021; Kaneda et al., 2023; Sun et al., 2023), and operator learning (Kovachki et al., 2023).\n\nRaissi, Maziar, Paris Perdikaris, and George E. Karniadakis. \"Physics-informed neural networks: A deep learning framework for solving forward and inverse problems involving nonlinear partial differential equations.\" Journal of Computational physics 378 (2019): 686-707.\n\nKochkov, Dmitrii, et al. \"Machine learning–accelerated computational fluid dynamics.\" Proceedings of the National Academy of Sciences 118.21 (2021): e2101784118.\n\nKaneda, Ayano, et al. \"A deep conjugate direction method for iteratively solving linear systems.\" International Conference on Machine Learning. PMLR, 2023.\n\nSun, Zhiqing, Yiming Yang, and Shinjae Yoo. \"A neural pde solver with temporal stencil modeling.\" International Conference on Machine Learning. PMLR, 2023.\n\nKovachki, Nikola, et al. \"Neural operator: Learning maps between function spaces with applications to pdes.\" Journal of Machine Learning Research 24.89 (2023): 1-97."
+      }
+    },
+    "id": "WDsE4NkSsH",
+    "forum": "d4gzLgGl7I",
+    "replyto": "QxEJdpR9AG",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18704/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18704/Authors"
+    ],
+    "number": 14,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18704/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764367980120,
+    "cdate": 1764367980120,
+    "tmdate": 1764535488253,
+    "mdate": 1764535488253,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "comment": {
+        "value": "We thank the reviewer for their thoughtful suggestions and constructive feedback, which have helped strengthen the paper.\n\n## Prior Works\n\n> *I think \"Our work represents the first steps towards developing machine learning models for high-speed flows\" is a bit of an inflated statement that could be toned down.*\n\nWe revised the following statements: \n\nAbstract:\n\n> ~~As ShockCast is the first framework for learning high-speed flows, we~~*We* evaluate our methods by generating three supersonic flow datasets.\n\nSection 1:\n\n> We therefore develop ShockCast, ~~the first~~ *a* machine learning framework ~~(to the best of our knowledge)~~ for temporally-adaptive modeling of high-speed flows.\n\n> Our work ~~represents the first~~ *takes* steps towards developing machine learning models for high-speed flows, where there is great potential for neural acceleration due to the immense computational requirements of classical methods.\n\nSection 4:\n\n> However, to the best of our knowledge, we are the first to consider learning to temporally re-mesh ~~and utilize~~ *by utilizing* data with adaptable temporal resolution, which ~~are both~~*is* vital for developing models for high-speed flows.\n\nSection 6:\n\n> Our work ~~represents the first~~ *takes* steps towards developing machine learning models for high-speed flows, where there is great potential for neural acceleration due to the immense computational requirements of classical methods.\n\n## Neural CFL Ablation (1/2)\n\n> *The paper makes an interesting observation that when using a neural PDE solver, you can't necessarily rely on the CFL number computed on the fine computational mesh used for the simulation, because the neural model will effectively downsample the mesh inside the network, and so the adaptive time step chosen should be on that coarser scale.*\n\nWe thank the reviewer for acknowledging the novelty of our insight that the CFL condition cannot be used with temporally-adaptive neural solvers. As a clarification, this motivation is driven by downsampling in the PDE solution space as a preprocessing step, not from any internal downsampling inside the neural network. From **Section 2.3**:\n\n> Speedups over classical methods are primarily achieved by the ability of neural solvers to learn solution mappings on coarsened grids in space-time (Stachenfeld et al., 2021; Kochkov et al., 2021). To maintain stability, classical methods require computational grids to be sufficiently fine in time, as specified by the CFL condition, as well as in space. On the other hand, neural methods can learn to map between solutions spaced hundreds of classical solver steps apart on much lower-dimensional spatial discretizations, thereby realizing substantial speedups.\n\nMore formally, suppose there is a PDE solution function $u(x,t):\\mathbb{R}^d\\times \\mathbb{R}^{+}\\mapsto\\mathbb{R}^D$, and we have used a classical solver to sample the solution on the space time grid $\\mathcal X\\times\\mathcal T\\subset \\mathbb{R}^d\\times \\mathbb{R}^{+}$, where for simplicity in exposition, we have assumed that the spatial grid $\\mathcal X$ is constant in time (no adaptive re-meshing). Neural solvers achieve a speedup by learning on the numerical solution interpolated and/or downsampled to a lower-dimensional grid. For example, we may select a new spatial grid $\\mathcal X'$ with $|\\mathcal X'|\\ll|\\mathcal X|$ and interpolate $u(\\mathcal X,t)\\to u(\\mathcal X',t)$ for all $t\\in\\mathcal T$. Similarly, we might select every 100th timestep in $\\mathcal T$ to form $\\mathcal T'$. Due to the ability of neural solvers to learn direct mappings without reliance on classical computation of numerical derivatives and integrals, they are much more robust to such coarsenings, and can realize substantial speedup compared to the classical solver through operating in this lower dimensional space.\n\nWe are now prepared to address the reviewer’s question:"
+      }
+    },
+    "id": "ecu4lKXvLg",
+    "forum": "d4gzLgGl7I",
+    "replyto": "QxEJdpR9AG",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18704/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18704/Authors"
+    ],
+    "number": 12,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18704/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764367471352,
+    "cdate": 1764367471352,
+    "tmdate": 1764821209857,
+    "mdate": 1764821209857,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "summary": {
+        "value": "The paper proposes ShockCast, a two-phase deep learning framework for adaptive time-stepping in high-speed flow modeling. The first phase employs a Neural CFL model to predict the time-step size ($\\Delta t$) based on the current flow state, while the second phase uses a time-conditioned neural solver to evolve the flow field by the predicted $\\Delta t$. The authors generate two new datasets (spherical blast and coal dust explosion) and demonstrate that ShockCast effectively handles the sharp gradients and varying time scales in supersonic/hypersonic flows."
+      },
+      "soundness": {
+        "value": 2
+      },
+      "presentation": {
+        "value": 3
+      },
+      "contribution": {
+        "value": 2
+      },
+      "strengths": {
+        "value": "First work to address adaptive time-stepping in neural solvers for high-speed flows, filling a critical gap in ML-based CFD. Potential to accelerate simulations in aerodynamics, aerospace, and explosion modeling."
+      },
+      "weaknesses": {
+        "value": "1.Evaluated only on two synthetic datasets (spherical blast & coal dust explosion). Training neural CFL + solver may still be expensive compared to classical adaptive methods.\n\n2.Be overly dependent on data.\n\n3.The proposed component is not sufficiently validated."
+      },
+      "questions": {
+        "value": "1.How were the initial conditions (e.g., Mach numbers, pressure ratios) for the datasets chosen? Are they representative of real-world scenarios?\n\n2.Can you visualize/analyze which features (e.g., velocity gradients, sound speed) most influence the predicted $\\Delta t$?\n\n3.Small errors in $\\Delta t$ prediction may compound during autoregressive rollout. How does ShockCast handle stability over long simulations?\n\n4.Does ShockCast generalize to unstructured meshes or three-dimensional (3D) flows?\n\n5.The paper lacks an analysis of error accumulation beyond 100 autoregressive steps.\n\n6.The requirement for high-fidelity solver data for training may be prohibitive for certain users.\n\n7.Please specify the computational costs of the proposed methods and the actual speedup achieved compared to numerical simulations."
+      },
+      "flag_for_ethics_review": {
+        "value": [
+          "No ethics review needed."
+        ]
+      },
+      "rating": {
+        "value": 2
+      },
+      "confidence": {
+        "value": 3
+      },
+      "code_of_conduct": {
+        "value": "Yes"
+      }
+    },
+    "id": "f97a8N0Qmb",
+    "forum": "d4gzLgGl7I",
+    "replyto": "d4gzLgGl7I",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18704/Reviewer_Ssu2"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18704/Reviewer_Ssu2"
+    ],
+    "number": 4,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18704/-/Official_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1761808118231,
+    "cdate": 1761808118231,
+    "tmdate": 1762928403661,
+    "mdate": 1762928403661,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "comment": {
+        "value": "## Stability Analysis \n\n> *No efficiency or stability analysis – The core motivation of adaptive stepping (e.g., computational savings or others) is never quantified; no wall-clock or rollout stability plots of flow evolution.*\n\n> *Can you demonstrate that ShockCast preserves key physical invariants or avoids divergence during long rollouts?*\n\n> *Conceptual shallowness: The so-called “Neural CFL” model merely regresses ∆t from local features; it does not derive from or guarantee compliance with the true CFL stability condition. There is no theoretical guarantee that predicted timesteps are stable or physically valid.*\n\nWe have added an analysis of physical invariants and computational savings in the sections **Physical Compliance** and **Computational Savings** below. For rollout stability, we have added experiments on a newly-generated long version of the circular blast setting with more than 100 unrolling steps per trajectory in **Section 5**:\n\n> We additionally assess the stability of ShockCast across many time integrations by generating an alternative extension of this setting to Long Circular Blast by more than doubling the length of the simulation, resulting in trajectories with more than 100 unrolling steps.\n\n> In **Figure 8a**, we present results for the long circular blast setting for U-Net and F-FNO neural solver backbones with time-conditioned layer norm. The solutions remain correlated above 0.9 for approximately half of the simulation time, and the low TKE and mean flow errors demonstrate that the predicted solutions remain stable and in-distribution, which is further supported by the rollout visualizations shown in **Appendix H**. \n\nIn **Appendix H**, we have added rollout stability plots:\n\n> In this section, we analyze performance of ShockCast in the long circular blast setting with a U-Net backbone. The rollout error over time is visualized in **Figure 22**. Although the solution predicted by ShockCast has a larger relative error as more steps are taken, the rollout visualizations in **Figures 23 to 26** show that predictions remain stable and in the distribution of solutions.\n\n## Hypersonic Cases\n\n> *Limited generalization – Only Mach < 3 cases are tested; unclear if the method scales to realistic hypersonic or turbulent regimes.*\n\n> *Have you tested the model on higher Mach (>5) or 3D flow cases to assess scalability?*\n\nWe have added experiments on a newly-generated hypersonic version of the airfoil shock setting in Appendix E, where the strength of the initial shock varies from 5 to 6:\n\n> To evaluate the ability of ShockCast to handle hypersonic (Mach $> 5$) settings, we extend the Airfoil Shock setting by varying the initial shock strength from Mach $5$ to Mach $6$. We found that despite having good performance on the airfoil shock setting, moderately-sized GNN models ($16$ message passing layers, embedding dimension of $128$) did not have sufficient capacity to accurately model the hypersonic dynamics despite having a large GPU footprint. Instead, we interpolated the irregular domain to a fine, uniformly spaced $256\\times 1024$ mesh to employ a stronger U-Net model. We then lifted the input fields to latent space through a point-wise linear projection applied to the mesh points away from the airfoil surface, and a learned embedding vector for mesh points on and inside of the airfoil. Following the application of the U-Net, the airfoil surface mesh points were masked out of the loss. We visualize rollout predictions for a held-out test case in **Figures 18 to 20.**"
+      }
+    },
+    "id": "gI8eQNRQhq",
+    "forum": "d4gzLgGl7I",
+    "replyto": "vwZPJyNtGA",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18704/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18704/Authors"
+    ],
+    "number": 5,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18704/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764364726465,
+    "cdate": 1764364726465,
+    "tmdate": 1764784206063,
+    "mdate": 1764784206063,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "comment": {
+        "value": "We thank the reviewer for their thoughtful suggestions and constructive feedback, which have helped strengthen the paper. We have added several new experiments and analyses aimed at addressing the reviewer’s concerns. \n\n## Additional Evaluation Settings\n\n> *Experimental validation is weak – Both datasets are self-generated 2D toy problems.*\n\nIn the following sections, we detail the following new experiments and analyses we have conducted in response to the reviewer's feedback:\n\n1. **Airfoil Shock**: new dataset and experiments to assess performance on a non-uniform mesh with a non-regular domain\n2. **Spherical Blast**: new dataset and experiments to assess performance in three spatial dimensions\n3. **Long Circular Blast**: new dataset and experiments to assess stability over long time integration periods\n4. **Hypersonic Airfoil Shock**: new dataset and experiments to assess performance with Mach > 5\n5. **Neural CFL Ablation Study**: Comparison of performance of ShockCast using neural CFL model vs oracle model vs mean prediction model \n6. **Mass Conservation Analysis**: analysis of predictions to assess physical consistency in terms of mass conservation\n\n> *Under the same physical conditions, which configuration for each benchmark is the most effective?*\n\nThe Neural CFL model with all modifications has the best performance in the coal dust explosion setting, while the base neural CFL model has the best performance in the circular blast setting. This could be because the variables modeled in the circular blast setting include all those used to compute the classical CFL condition, while the more complicated form of the CFL condition for multiphase flows results in some of the variables being omitted. The UNet variant of ShockCast performs best in the coal dust explosion setting across all three metrics (correlation time, Turbulence Kinetic Energy error, and mean flow error). Meanwhile, the F-FNO variant of ShockCast performs best in the circular blast setting in all metrics except correlation time, where the U-Net has the best performance. Please see Section 5.4 for further discussion.\n\n## Irregular Mesh\n\n> *Have you tested the model on irregular domain cases to assess scalability?*\n\nIrregular domains require non-uniform meshes, which necessitates the use of GNN-based backbones for the neural solver and neural CFL modules in ShockCast. To assess the GNN variant of ShockCast, we have added a new Airfoil Shock setting featuring an irregular domain, discussed in Section 5:\n\n>  **Airfoil Shock.** The third setting we consider is a shock-airfoil interaction problem involving a NACA 0012 airfoil immersed in a compressible flow. We initialize a normal shock inside the domain and vary its initial strength between Mach numbers $1.2$ and $2.1$. In addition, we vary the angle of attack of the airfoil between $\\pm 8^\\circ$, yielding a total of $100$ cases with $90$ used for training and $10$ for evaluation. Once the simulation begins, the shock travels from left to right and impinges on the airfoil, generating strong compression on the windward side followed by shock reflections and downstream vortical structures. The complexity of the flow increases with both the shock strength and the angle of attack. The irregularity of the airfoil geometry allows us to evaluate ShockCast beyond regular domains with uniform discretizations. \n\n>  Finally, for the Airfoil Shock settings, we experiment with MeshGraphNets (MGN) (Pfaff et al., 2021) and Diffusion Graph Nets (DGN) from Valencia et al. (2025), which is based on the Graph U-Net (Lino et al., 2022; Gao & Ji, 2019). Both GNN architectures use affine timestep conditioning.\n\n> Finally, we compare ShockCast with MGN and DGN neural solver backbones in **Figure 8b**, where we find MGN to be more performant in terms of correlation time and mean flow error. We visualize ShockCast predictions for a test airfoil case in **Figure 9**. \n\nWe provide more details on the airfoil shock data in **Appendix A.4**, and more details on the neural solvers and the neural CFL models used for the GNN variant of ShockCast in **Appendix B**.\n\n## 3D Flows\n\n> *Have you tested the model on higher Mach (>5) or 3D flow cases to assess scalability?*\n\nWe have added experiments on a newly-generated 3D flow dataset extending the circular blast setting to three spatial dimensions in Section 5:\n\n> To assess the scalability of ShockCast to three spatial dimensions, we additionally generate and evaluate on an extension of this setting to a Spherical Blast.\n\n> In **Figure 7**, we visualize unrolled predictions for a spherical blast case using a 3D U-Net neural solver backbone with time-conditioned layer norm and 3D ConvNeXt neural CFL backbone.\n\nWe provide more details on the spherical blast data in **Appendix A.3**."
+      }
+    },
+    "id": "h8nwIXZibz",
+    "forum": "d4gzLgGl7I",
+    "replyto": "vwZPJyNtGA",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18704/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18704/Authors"
+    ],
+    "number": 4,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18704/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764364556366,
+    "cdate": 1764364556366,
+    "tmdate": 1764820296748,
+    "mdate": 1764820296748,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "title": {
+        "value": "Update: ShockCast Response"
+      },
+      "comment": {
+        "value": "We thank the reviewers for their thoughtful feedback and for suggesting new experiments that explore several additional settings to improve our work. We are actively running these experiments, however, because they rely on computationally-intensive simulations with our classical solver, they require significant processing time. We are preparing our response as quickly as possible and appreciate the reviewers’ patience as we complete these experiments."
+      }
+    },
+    "id": "jeybwkXtpb",
+    "forum": "d4gzLgGl7I",
+    "replyto": "d4gzLgGl7I",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18704/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18704/Authors"
+    ],
+    "number": 3,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18704/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1763770270569,
+    "cdate": 1763770270569,
+    "tmdate": 1763770270569,
+    "mdate": 1763770270569,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "comment": {
+        "value": "We thank the reviewer for their thoughtful suggestions and constructive feedback, which have helped strengthen the paper.\n\n## Runtime Comparison\n\n> *1. Missing Quantification of Speedup: The paper's primary motivation is the immense computational cost of classical high-speed flow solvers. However, the results section fails to quantify the final speedup achieved by the full ShockCast pipeline (inference runtime) relative to the original classical solver. Without this figure, the practical utility of the entire framework remains unproven. (Only the classical solver runtime is given in Table 5, min: $\\sim 15$K seconds, mean: $\\sim67$K seconds)*\n\n> *Missing Speedup Quantification: The core justification is computational efficiency, yet the paper fails to state the final speedup factor (e.g., $1000\\times$) of ShockCast relative to the original classical solver runtime (which can take tens of thousands of seconds). This critical number must be explicitly provided*\n\nWe have added a runtime comparison of ShockCast to the classical solver in Appendix C.5:\n\n> We compare the runtime of the classical solver to ShockCast with the F-FNO neural solver backbone using affine timestep conditioning following the best practices described  in McGreivy & Hakim (2024). Specifically, we report both GPU and CPU runtimes for ShockCast, and additionally report both high-fidelity and low-fidelity runtimes for the classical solver. The high-fidelity classical solver refers to the use of the original solver settings, while low-fidelity uses a setting that trades off a degree of accuracy comparable to the neural solver error for increased efficiency. We compare using a circular blast case from the test set with initial pressure ratio $47.575$. The low fidelity solver is achieved by removing the finest level of the mesh. Times are shown in **Figure 15**, while per-step errors relative to the high-fidelity solution are shown in **Figure 16**. The high fidelity, low fidelity, and neural solutions are visualized in **Figure 17**.\n\nMcGreivy, Nick, and Ammar Hakim. \"Weak baselines and reporting biases lead to overoptimism in machine learning for fluid-related partial differential equations.\" Nature machine intelligence 6.10 (2024): 1256-1269.\n\n## MoE Complexity\n\n> *Novel and Effective Conditioning Strategies: The introduction of Euler Residuals and Mixture of Experts (MoE) as timestep conditioning strategies is technically insightful. The results demonstrate that these methods are highly competitive, achieving the lowest TKE error for the Circular Blast (F-FNO backbone with MoE/Euler) and best Mean Flow/TKE performance for the Coal Dust Explosion (U-Net backbone with MoE/Euler)*\n\n> *Complexity of MoE Implementation: The MoE conditioning significantly increases peak training memory (e.g., F-FNO: $18.9$GiB (Affine) vs. $37.2$GiB (MoE); Transolver: $41.8$GiB (Affine) vs. $62.4$GiB (MoE))9. While the complexity is offset by reducing the latent dimension for some models, the substantial jump in memory requirement suggests that the MoE approach is challenging to implement and scale, requiring clarification on the trade-off.*\n\n> *rade-Off for MoE Complexity: The Mixture of Experts (MoE) component, while showing excellent results, dramatically increases memory consumption (e.g., up to $\\sim62$GiB)14. The efficiency/performance trade-off needs deeper analysis, as the simpler Euler Residuals or Affine methods often perform comparably*\n\nWe thank the reviewer for acknowledging the novelty and effectiveness of our timestep-conditioning strategies. In Section 3.4, we further clarify the computational trade-off introduced by the MoE strategy:\n\n> Because our router weights are dense, we do not leverage the conditional-computation efficiency of sparse MoE architectures (Shazeer et al., 2017; Fedus et al., 2022). As a result, the MoE conditioning mechanism trades increased model capacity for greater computational cost.\n\nIn Appendix L, we've additionally added the following statement:\n\n>  As discussed in Section 3.4, the MoE timestep-conditioning strategy does not leverage the efficiency advantages of sparse MoE architectures, which apply conditional computation over experts. While this design allows for a simpler implementation without load-balancing losses (Shazeer et al., 2017; Fedus et al., 2022), future work should explore incorporating sparsity into MoE-based timestep conditioning. Such an approach holds strong potential for scaling time-adaptive neural solvers while balancing computational and memory cost.\n\nNoam Shazeer, Azalia Mirhoseini, Krzysztof Maziarz, Andy Davis, Quoc Le, Geoffrey Hinton, and Jeff Dean. Outrageously large neural networks: The sparsely-gated mixture-ofexperts layer. In International Conference on Learning Representations, 2017.\n\nFedus, William, Barret Zoph, and Noam Shazeer. \"Switch transformers: Scaling to trillion parameter models with simple and efficient sparsity.\" Journal of Machine Learning Research 23.120 (2022): 1-39."
+      }
+    },
+    "id": "tBCEYIN1Bp",
+    "forum": "d4gzLgGl7I",
+    "replyto": "GElBmFxqsd",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18704/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18704/Authors"
+    ],
+    "number": 15,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18704/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764368397376,
+    "cdate": 1764368397376,
+    "tmdate": 1764368397376,
+    "mdate": 1764368397376,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "summary": {
+        "value": "The paper proposes ShockCast, a two-phase deep learning framework for modeling high-speed flows with adaptive time-stepping.\n\n- Phase one uses a “Neural CFL” model to predict the timestep ∆t;\n\n- Phase two employs a timestep-conditioned neural solver to evolve the flow field.\n\nThe authors evaluate their framework on two internally generated supersonic datasets (circular blast and coal dust explosion), comparing multiple backbone architectures and conditioning strategies."
+      },
+      "soundness": {
+        "value": 3
+      },
+      "presentation": {
+        "value": 2
+      },
+      "contribution": {
+        "value": 2
+      },
+      "strengths": {
+        "value": "- Clear motivation: aiming to addresses PDEs under varying time intervals.\n\n- Clear architecture modularity: Two phases modeling.\n\n- Inclusion of physically inspired features (∇u, wave speed, CFL terms) is a positive step toward physics-awareness.\n\n- Comprehensive validations across several backbones and conditioning methods.\n\n- Figures are clear and the manuscript is overall readable."
+      },
+      "weaknesses": {
+        "value": "- Conceptual shallowness: The so-called “Neural CFL” model merely regresses ∆t from local features; it does not derive from or guarantee compliance with the true CFL stability condition. There is no theoretical guarantee that predicted timesteps are stable or physically valid.\n\n- Lack of physical consistency: The paper never checks conservation of mass, momentum, or energy, which is essential for high-Mach or compressible flows.\n\n- Experimental validation is weak – Both datasets are self-generated 2D toy problems. Under the same physical conditions, which configuration for each benchmark is the most effective?\n\n- No efficiency or stability analysis – The core motivation of adaptive stepping (e.g., computational savings or others) is never quantified; no wall-clock or rollout stability plots of flow evolution.\n\n- Limited generalization – Only Mach < 3 cases are tested; unclear if the method scales to realistic hypersonic or turbulent regimes.\n\n- Over-claimed novelty – Prior works (e.g., continuous-time neural solvers, time-conditioned FNOs, and physics-aware operator networks) already include similar temporal adaptivity ideas; Also many works for supersonic/hypersonic flow modeling (not the first machine learning framework).\n\n- Method complexity vs. benefit – The two-phase design and multiple conditioning mechanisms add heavy machinery without showing clear improvement over a simpler time-conditioned baseline. Reporting a clear and full coparison (vs. graph-based methods, transformer-based methods, FNO-based methods, and etc. ) on one new table."
+      },
+      "questions": {
+        "value": "- If the ∆t distribution is known in training data, why we need the two-phases modeling?\n\n- If the two-phases modeling is usefull, the predicted ∆t from Phase one is inherently impossible for it to perfectly match the true ∆t  (based on a continuous value space) . In this case, what is the significance of designing the Phase one?\n\n- Can you demonstrate that ShockCast preserves key physical invariants or avoids divergence during long rollouts?\n\n- How much computational speedup or advantage (vs. one-phase modeling with time variable inputs) is achieved in practice?\n\n- Have you tested the model on higher Mach (>5) or 3D flow cases to assess scalability?\n\n- Have you tested the model on irregular domain cases to assess scalability?\n\nShould you be able to satisfactorily address the points I've raised above, I will accordingly provide a positive rating."
+      },
+      "flag_for_ethics_review": {
+        "value": [
+          "No ethics review needed."
+        ]
+      },
+      "rating": {
+        "value": 4
+      },
+      "confidence": {
+        "value": 5
+      },
+      "code_of_conduct": {
+        "value": "Yes"
+      }
+    },
+    "id": "vwZPJyNtGA",
+    "forum": "d4gzLgGl7I",
+    "replyto": "d4gzLgGl7I",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18704/Reviewer_WzPk"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18704/Reviewer_WzPk"
+    ],
+    "number": 2,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18704/-/Official_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1761469391424,
+    "cdate": 1761469391424,
+    "tmdate": 1764358967588,
+    "mdate": 1764358967588,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  }
+]

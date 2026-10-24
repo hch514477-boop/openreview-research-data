@@ -1,0 +1,507 @@
+[
+  {
+    "replying_to": "Replying to EDIT: Early Diffusion Inference Termination for dLLMs Based on Dynamics of Training Gradients",
+    "display_title": "Official Review of Submission3184 by Reviewer uwNg",
+    "content": {
+      "summary": {
+        "value": "This paper provides a mechanism to early-stop the diffusion process in a dLLM.  Basically, we collect information during LoRA fine-tuning about which dimensions of the query output projection (in the last layer of the Transformer) get the most consistent gradients, as per updates to the LoRA B matrix.  Then, during inference, we look at the dimensions of unmasked tokens in the representations after the same query projection, and see if they are aligning with the FT gradients.  If they are, we say that \"reasoning stability\" has been achieved, and we stop the diffusion process.  Some experiments assess whether this can really save diffusion steps on downstream tasks."
+      },
+      "soundness": {
+        "value": 1
+      },
+      "presentation": {
+        "value": 2
+      },
+      "contribution": {
+        "value": 1
+      },
+      "strengths": {
+        "value": "It's well-motivated to try to make use of the gradient information that was collected during training (or fine-tuning) and re-use that during inference.  Diffusion seems like a great place to start.\n\nI think even the specific idea to use gradient momentum info from reasoning-based SFT to see if generation has arrived at a \"reasoning\"-like solution is not necessarily a bad idea.\n\nStudying diffusion LLMs are also a very wide-open space so testing dLLMs like LLaDA-8B on downstream tasks, and finding out what the weak points are, is good to do.\n\nGood job to have a discussion of limitations (in the conclusion), however brief."
+      },
+      "weaknesses": {
+        "value": "Overall, the approach here just feels very premature, like, as a practitioner, I am really unsure whether simpler things would work, or whether other choices could unlock much bigger gains.  There's not a lot of theory or empirical rigour behind the findings, e.g., what if we used an Oracle and stopped at the optimal number of steps in each case, what are the maximum speedups that we could get, or the best improvements in quality?  It's just not well-scoped in the current submission.  This lack of rigor and testing of alternative ideas, plus a lack of comparison to baselines, and some questionable experimental decisions, makes me think this paper is not yet valuable to the community.\n\nFrom my perspective, the scope of other things that COULD be tried is very large, and it's not clear how important the choices made in the paper actually are:\n- What about just using the parameters themselves, or momentum itself, or just the evolution tensor, rather than the evolution tensor after the reduction?\n- Why just the Query projection?  Why just the last layer?\n- Why Cosine versus other measures?  Why KL divergence versus other measures?\n- What if we didn’t ensure stability with Ω consecutive scores below δ, but did something else?\n\nThe current method introduces new task-specific (!) hyperparameters:\n- δ, Ω, τblk\n- Fundamentally, I don’t think we should be tuning hyperparameters on specific downstream tasks, as this confounds model comparison – how can we compare to models that weren’t fine-tuned, e.g., on the “Countdown” task?  Update: actually, this paper does make this mistake.\n- Did we tune the number of diffusion steps on each task as well for the baselines?  It seems like you just compare at different max denoising steps (set depending on sequence length), but the EDIT count is below the smallest that you tested, so it makes me wonder if fewer steps would be better for these other ones.\n\nSoundness:\n- The fact we didn’t compare to any other methods of early stopping for denoising… this really surprised me.  Like, accepting and freezing unmasked tokens when their probability crosses a threshold?  You mentioned “output stability or confidence” and \"entropy\" so why not test those?  What's the downside?\n- I mean, the fact we get different (and often better) accuracy numbers is surprising to me, and seems to reflect some kind of bias in the trained models that can be alleviated through hyperparameter tuning, which was only done with EDIT.  Fundamentally, I would not expect more steps to impair a diffusion model, although I believe there is prior work showing accuracy does not increase monotonically in number of steps.  Perhaps you should have plotted accuracy versus steps for the baselines for Countdown and then if EDIT is below this curve, that would alleviate some of my concerns.\n\nNitpicks:\n- I think since the fundamental idea of this paper is that SFT reveals reasoning patterns in the activations, you should really explain the SFT dataset in more detail, right?\n- Oh man, Tables 1 and 2, those are quite tiny fonts!  Is there no limit to how small we’d make them???\n- Prior work specifically using momentum to identify important params: Dettmers - Sparse Networks from Scratch - Faster Training without Losing Performance - 1907.04840v2\n- You know, diffusion itself does allow “guidance” in the form of gradients to be applied during the generative process.  I think maybe you could link your pseudo-gradients to this theory a bit better."
+      },
+      "questions": {
+        "value": "- When we convert alignment scores into a probability distribution, what is it a distribution over?   There are many probabilistic arguments made about this distribution, but I don’t really understand, e.g., what domain the “support” of this distribution lives in.\n- Is full-parameter SFT or CPT or even RL a limitation of your method, or just a limitation of your experimental evaluation?  What about other optimizers, e.g., Muon?"
+      },
+      "flag_for_ethics_review": {
+        "value": [
+          "No ethics review needed."
+        ]
+      },
+      "rating": {
+        "value": 2
+      },
+      "confidence": {
+        "value": 4
+      },
+      "code_of_conduct": {
+        "value": "Yes"
+      }
+    },
+    "id": "MfACJTZKFH",
+    "forum": "dQU7OKCagD",
+    "replyto": "dQU7OKCagD",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission3184/Reviewer_uwNg"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission3184/Reviewer_uwNg"
+    ],
+    "number": 1,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission3184/-/Official_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1761508425634,
+    "cdate": 1761508425634,
+    "tmdate": 1762916588981,
+    "mdate": 1762916588981,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission3184 by Reviewer uwNg",
+    "display_title": "Summary: Momentum, Cosine/KL choice, Stability rule, Threshold, Comparison, Optimizer-agnostic design",
+    "content": {
+      "title": {
+        "value": "Summary: Momentum, Cosine/KL choice, Stability rule, Threshold, Comparison, Optimizer-agnostic design"
+      },
+      "comment": {
+        "value": "# Using momentum as the stopping signal\nThank you for the suggestion. AdamW’s update rule combines both momentum and variance information, and EDIT relies on this combined update. We also evaluated using momentum alone as the stopping signal. It gives a reasonable trend, but the stopping point varies more and the accuracy is slightly lower than with EDIT (results in the table below).\n| Method                  | Countdown@128 | Countdown@256 | Countdown@512 |\n|-------------------------|----------------|----------------|----------------|\n| EDIT (momentum only)    | 23.4           | 29.7           | 25.4           |\n| EDIT (combined update)  | **28.9**       | **31.6**       | **27.7**       |\n\nThese results indicate that momentum is informative, but the combined update signal offers a more stable basis for determining when denoising has settled.\n\n# Design choices and architectural components\nThank you for raising this concern. The reference to the Query projection in the final layer in Section 2.2.1 is meant to illustrate the behavior shown in Figure 4, not to imply that EDIT relies exclusively on that component. In practice, EDIT evaluates LoRA-B activations from the Q/K/V projections across layers and uses their step-to-step stability as the stopping signal. This provides a consistent way to connect the update directions learned during SFT with the model’s denoising trajectory.\n\nWe agree that other formulations—such as isolating specific projections or choosing different layers—could also be explored. Our goal in this work is to examine whether training-derived update information can support an effective halting signal, and the formulation we adopt is sufficient to study this question across several reasoning benchmarks.\n\n# Choice of cosine similarity and KL divergence\nWe use cosine similarity to track directional alignment and KL divergence to assess distributional change. Cosine is scale-invariant, which helps when activation magnitudes vary across denoising steps, and KL provides a straightforward measure of how distributions shift over time.\n\nOther measures could also be used, but our goal is to test whether training-derived update information can provide a stable stopping signal. Cosine and KL give a clean and consistent criterion for this purpose across the benchmarks we study.\n\n# Choice of the $\\Omega$-step stability rule\nEDIT uses an $\\Omega$-step window to avoid reacting to brief fluctuations that appear in the very early denoising steps. A short consistency check makes the stopping point more stable while keeping the rule simple and lightweight. In practice, this criterion works reliably across the benchmarks we evaluate.\n\n# Task-specific thresholds and comparison to baselines\nWe tune $\\delta$ and $\\Omega$ once per task using a small validation split, and we agree this introduces some tuning overhead. In practice, however, a narrow range $\\delta \\approx$0.05-0.1, $\\Omega \\approx$6-12 works reliably across benchmarks, so EDIT does not depend on fine-grained, task-specific adjustments.\n\nRegarding comparison to baselines, we use the standard diffusion schedules defined by each sequence length. We do not retune the number of denoising steps per task for the baselines; instead, we follow the default settings so that all methods share the same computation budget. EDIT uses a data-driven stopping rule, so its step count can fall below this schedule, but the baselines are evaluated under their default configurations. \n\n# Comparison to early-stopping baselines\nEDIT uses training-time optimizer metadata together with Q/K/V activation patterns to determine when the denoising process has stabilized. This gives a stopping rule based on how internal activations change during denoising, using the training-aligned update information rather than relying on output-level heuristics.\n\n# What is the distribution over, and what is its support?\nThe probability distribution is defined over the visible (unmasked) tokens at the current denoising step. At step $t$, we compute an alignment score for each visible token in the set $S_t$ and apply a softmax over only those tokens. In other words, the distribution’s support is the visible-token set $S_t$ at that step.\n\nWhen comparing step $t−1$ and step $t$, the visible sets differ. We therefore restrict both distributions to the intersection $I_t = S_{t-1} ∩ S_t$, renormalize on this shared support, and compute KL divergence on $I_t$. All probabilistic arguments in the paper are based on this matched-support domain.\n\n# Full-parameter SFT/CPT/RL and Other optimizers\nOur use of LoRA-based SFT is an experimental choice—it simplifies extracting update dynamics and keeps metadata small. EDIT is optimizer-agnostic and only needs aggregated update statistics; it also works with Lion optimzer. Full-parameter SFT, CPT, or RL are compatible—they increase metadata size but do not change EDIT’s core mechanism of comparing training-time update patterns to inference-time activations."
+      }
+    },
+    "id": "Nyd0UFjvjb",
+    "forum": "dQU7OKCagD",
+    "replyto": "MfACJTZKFH",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission3184/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission3184/Authors"
+    ],
+    "number": 4,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission3184/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764735960464,
+    "cdate": 1764735960464,
+    "tmdate": 1764735960464,
+    "mdate": 1764735960464,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to EDIT: Early Diffusion Inference Termination for dLLMs Based on Dynamics of Training Gradients",
+    "display_title": "Official Review of Submission3184 by Reviewer 3GSH",
+    "content": {
+      "summary": {
+        "value": "The paper proposes **EDIT (Early Diffusion Inference Termination)**, an adaptive early inference termination rule for diffusion LLMs (dLLMs). During SFT with LoRA on Q/K/V, the method aggregates AdamW update statistics into a compact, feature-aligned “AdamW evolution” vector ($u$) that encodes which parameters consistently carried the learning signal. At inference, EDIT computes per-step cosine similarities between token activations and $u$, and halts denoising for tokens once a stability condition is met. The authors provide extensive experiments supporting the claim that training dynamics can guide safe early termination."
+      },
+      "soundness": {
+        "value": 2
+      },
+      "presentation": {
+        "value": 2
+      },
+      "contribution": {
+        "value": 2
+      },
+      "strengths": {
+        "value": "* **Insightful diagnostics.** Gradient-based “pseudo-gradient” alignment with SFT gradients; domain-wise breakdowns (e.g., GPQA subdomains) and LoRA-A vs. LoRA-B sparsity analyses justify design choices.\n* **Practical gains with tiny overhead.** Reported step reductions up to ~68% and a ~1.5 MB metadata footprint for a 32-block model are compelling for deployment."
+      },
+      "weaknesses": {
+        "value": "* **Metadata extraction.** EDIT relies on training-time metadata extraction. Many released checkpoints does not expose training recipe, does the selection of training recipe (dataset, hyperparam) affect extraction.\n* **Scope of validation.** Experiments center on a single dLLM family (LLaDA-8B) and five reasoning tasks on one hardware stack. It’s hard to assess robustness across models, sizes, datasets. \n* **Task-tuned thresholds.** ($\\delta,\\Omega$) are selected per task via validation for an accuracy/steps trade-off. This introduces tuning burden and potential brittleness under distribution shift. \n* **Poor presentation** Figures and tables are too small comparing to captions, such as Figure 3/4/5, Table 1/2. Certain figures in the paper have strange frames, such as Figure 2/4/8. The theory seems to be ad-hoc."
+      },
+      "questions": {
+        "value": "* **Baselines & fairness.** How does EDIT compare to strong adaptive early inference termination rule for dLLMs under identical compute budgets—and to autoregressive early-exit baselines on similar tasks? **The paper only compare EDIT with plain baseline, However, a lot of dLLM acceleration methods already exists**, such as [1][2].\n* **Unclear Intuition** What is the intuition of $u$? what makes similarity between each token’s activation and the AdamW evolution vector important? The paper does not provide a clear intuition.\n* **Metadata extraction.** Does SFT training recipe affects the performance of EDIT? How does performance change under domain shift from the SFT distribution?\n* **Adaptive calibration.** Can $(\\delta,\\Omega)$ be set online *without* task-level validation?\n\n[1] Wu C, Zhang H, Xue S, Liu Z, Diao S, Zhu L, Luo P, Han S, Xie E. Fast-dllm: Training-free acceleration of diffusion llm by enabling kv cache and parallel decoding. arXiv:2505.22618. \\\n[2] Li P, Zhou Y, Muhtar D, Yin L, Yan S, Shen L, Liang Y, Vosoughi S, Liu S. Diffusion language models know the answer before decoding. arXiv:2508.19982. \\\n[3] Ben-Hamu H, Gat I, Severo D, Nolte N, Karrer B. Accelerated Sampling from Masked Diffusion Models via Entropy Bounded Unmasking, NeurIPS 2025."
+      },
+      "flag_for_ethics_review": {
+        "value": [
+          "No ethics review needed."
+        ]
+      },
+      "rating": {
+        "value": 4
+      },
+      "confidence": {
+        "value": 3
+      },
+      "code_of_conduct": {
+        "value": "Yes"
+      }
+    },
+    "id": "49AXqvdrQP",
+    "forum": "dQU7OKCagD",
+    "replyto": "dQU7OKCagD",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission3184/Reviewer_3GSH"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission3184/Reviewer_3GSH"
+    ],
+    "number": 2,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission3184/-/Official_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1761637813984,
+    "cdate": 1761637813984,
+    "tmdate": 1762916588816,
+    "mdate": 1762916588816,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission3184 by Reviewer 3GSH",
+    "display_title": "Summary: Metadata, Domain shift, Validation, Tuning, and Baselines",
+    "content": {
+      "title": {
+        "value": "Summary: Metadata, Domain shift, Validation, Tuning, and Baselines"
+      },
+      "comment": {
+        "value": "We appreciate the reviewer’s thoughtful feedback and respond to the points below.\n\n# Metadata extraction\nWe acknowledge that many released checkpoints do not preserve optimizer states, which limits where EDIT can be applied. Our method requires access only to these optimizer moments, and we highlight that this metadata provides useful signals about the model’s learned update dynamics. When available, it allows EDIT to relate training-time behavior to inference-time stability and improve efficiency without altering the base model.\n\n# Domain shift\nEDIT relies on the optimizer moments learned during SFT, while the stopping criterion is determined at inference based on when the model’s internal updates stabilize. This signal does not require the test distribution to mirror the SFT data. In our evaluation, tasks with different reasoning characteristics—including arithmetic, logic, and symbolic manipulation—show stable patterns of convergence, and EDIT halts reliably across all of them.\n\n# Scope of validation\nEDIT is lightweight and does not depend on a specific architecture—it only uses the optimizer-derived update information and the model’s inference trajectory—so the mechanism is applicable beyond this particular model. The five benchmarks cover different forms of reasoning, providing varied conditions for examining EDIT’s behavior. Broadening the evaluation to additional model sizes and architectures would offer further context and can be pursued in follow-up work.\n\n# Task-tuned thresholds and Adaptive calibration\nEDIT selects ($\\delta$, $\\Omega$) once per task using a small validation split. We agree that this introduces some tuning overhead. In practice, values in the range $\\delta \\approx$0.05–0.1 and $\\Omega \\approx$6–12 work reliably across several tasks, indicating that EDIT does not depend on fine-grained tuning. Although EDIT does not adjust these thresholds online, the stopping signal is computed during inference and does not rely on task-level labels. As a result, EDIT can run with default settings when task-specific validation is not available.\n\n# Baselines & fairness\nWe appreciate the reviewer’s suggestion. In addition to the SFT baseline reported in the paper, we include comparisons with two recent dLLM acceleration methods, Fast-dLLM [1] and Prophet [2], under the same 0-shot evaluation setting. The results are shown in the tables below. The symbol ($\\dagger$) denotes results reproduced from the Fast-dLLM open-source implementation. We also note that EDIT reaches its GSM8K@256 performance using $\\approx$ 103.5 steps, while Prophet requires $\\approx$160 steps.\n\n| Method                            | GSM8K@256 (0-shot) | GPQA@256 (0-shot) |\n| --------------------------------- | ------------------ | ----------------- |\n| EDIT (Ours)                   | 77.6          | **27.7**          |\n| LLaDA (SFT) + Cache (from [1]) †   | 72.0               | 22.1              |\n| LLaDA (SFT) + Parallel (from [1]) †| 73.1               | 26.3              |\n| Fast-dLLM [1]†                     | 71.6               | 22.5              |\n| Prophet [2]                       | **77.9**           | 25.7              |\n\n# Intuition behind u and the similarity measure\nThe vector $\\mathbf{u}$ is derived from the optimizer moments accumulated during SFT and reflects the update direction that the model repeatedly moved toward at a given projection layer. Intuitively, $\\mathbf{u}$ summarizes how the model learned to adjust its computed representations during training.\nDuring inference, we measure how each token’s activation aligns with $\\mathbf{u}$. When activations continue to change relative to $\\mathbf{u}$, the model is still adjusting its internal representation in a way that resembles ongoing “reasoning.” Once this alignment stabilizes, the model’s updates stop moving in directions emphasized during training, indicating that the representation has settled. EDIT uses this stability as the signal that further denoising steps are no longer contributing meaningfully.\n\n# Presentation\nThank you for pointing this out. We have enlarged Tables 1 and 2 and increased the font sizes in Figures 3, 4, and 5 to improve readability. We also removed the unintended frames in Figures 2, 4, 9, and 10."
+      }
+    },
+    "id": "3s3VgBUTHy",
+    "forum": "dQU7OKCagD",
+    "replyto": "49AXqvdrQP",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission3184/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission3184/Authors"
+    ],
+    "number": 3,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission3184/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764734404890,
+    "cdate": 1764734404890,
+    "tmdate": 1764744658949,
+    "mdate": 1764744658949,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to EDIT: Early Diffusion Inference Termination for dLLMs Based on Dynamics of Training Gradients",
+    "display_title": "Official Review of Submission3184 by Reviewer GDvF",
+    "content": {
+      "summary": {
+        "value": "The paper introduces EDIT, an inference-time early termination rule for diffusion LLMs that reuses training-time optimizer information. During SFT with LoRA, the method aggregates AdamW moments into a compact “AdamW evolution” vector $u$ that encodes parameter-importance patterns; at inference it measures cosine alignment between token activations and $u$, converts these to per-step distributions on visible tokens, and stops when matched-support KL divergence stays below a threshold for $\\\\Omega$ consecutive steps. The theory shows a multi-step control bound $TV \\\\le \\\\Omega\\\\sqrt{\\\\delta/2}$ and a margin condition that preserves the argmax, yielding PAC-style certificates for chosen $(\\\\delta,\\\\Omega)$. Empirically, on LLaDA-8B across Countdown, Sudoku, MATH500, GSM8K, and GPQA, EDIT reduces denoising steps by 11.8% to 68.3% with comparable accuracy on most tasks; storage overhead is about 0.02% of an 8 GB model."
+      },
+      "soundness": {
+        "value": 3
+      },
+      "presentation": {
+        "value": 3
+      },
+      "contribution": {
+        "value": 3
+      },
+      "strengths": {
+        "value": "* Clear definition of the AdamW evolution signal and why LoRA-B is preferred, with sparsity metrics and visualizations.\n* Matched-support KL and multi-step TV bounds yield simple certificates and a PAC-style calibration rule.\n* Minimal storage and implementation overhead, with complexity lower than attention and integration as a wrapper at inference.\n* Certified early stop rates reported across tasks, indicating practical realizations of the theory."
+      },
+      "weaknesses": {
+        "value": "* Hyperparameter selection uses per-task validation sets and a grid over $(\\\\delta,\\\\Omega)$; robustness to mis-tuning or cross-task portability is not thoroughly analyzed.\n* GSM8K at length 512 shows a noticeable accuracy drop with EDIT, which deserves a short diagnostic beyond the brief discussion. Minor."
+      },
+      "questions": {
+        "value": "* Please report end-to-end system metrics for one representative task and length (e.g., Countdown@256): wall-clock per instance, tokens per second, and peak GPU memory, alongside the step reductions already shown in Table 2. This is a light logging change.\n* For GSM8K at length 512, please add a short diagnostic: either (i) a histogram of early-stop step vs. correctness, or (ii) a 2×2 grid over $(\\\\delta,\\\\Omega)\\\\in\\\\{0.05,0.1\\\\}\\\\times\\\\{6,12\\\\}$ reporting accuracy and mean denoising steps. One figure or a small table is sufficient."
+      },
+      "flag_for_ethics_review": {
+        "value": [
+          "No ethics review needed."
+        ]
+      },
+      "rating": {
+        "value": 6
+      },
+      "confidence": {
+        "value": 3
+      },
+      "code_of_conduct": {
+        "value": "Yes"
+      }
+    },
+    "id": "itYHj9WLEN",
+    "forum": "dQU7OKCagD",
+    "replyto": "dQU7OKCagD",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission3184/Reviewer_GDvF"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission3184/Reviewer_GDvF"
+    ],
+    "number": 3,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission3184/-/Official_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1761989193988,
+    "cdate": 1761989193988,
+    "tmdate": 1762916588620,
+    "mdate": 1762916588620,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission3184 by Reviewer GDvF",
+    "display_title": "Summary: Efficiency, Diagnostics, and Hyperparameter",
+    "content": {
+      "comment": {
+        "value": "We appreciate the reviewer’s helpful suggestion and include the analysis below.\n\n# End-to-end system metrics (Countdown@256)\n| Method   | Wall time per instance | Tokens per second | Peak GPU memory (GB) | Step reduction (%) |\n| -------- | ---------------------- | ----------------- | -------------------- | ------------------ |\n| Baseline | 11.3                   | 22.6              | 17.1                 | –                  |\n| EDIT | **5.7**                | **44.4**          | 17.4                 | **68.3**           |\n\n# GSM8K@512 Diagnostic\nWe show in Figure 8 (Section C.3) a histogram summarizing early-stop steps for GSM8K at sequence length 512. Correct predictions tend to stop at later denoising steps, while incorrect predictions more often halt slightly earlier. This pattern is consistent with GSM8K requiring longer reasoning chains.\n\n# Hyperparameter selection\nEDIT selects ($\\delta$, $\\Omega$) using a small per-task validation split. In our experiments, a narrow range of values ($\\delta$ $\\approx$ 0.05–0.1, $\\Omega$ $\\approx$ 6–12) produces consistent behavior across multiple tasks, suggesting reasonable tolerance to moderate mis-tuning."
+      },
+      "title": {
+        "value": "Summary: Efficiency, Diagnostics, and Hyperparameter"
+      }
+    },
+    "id": "BvcXdMLKKc",
+    "forum": "dQU7OKCagD",
+    "replyto": "itYHj9WLEN",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission3184/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission3184/Authors"
+    ],
+    "number": 2,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission3184/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764733779809,
+    "cdate": 1764733779809,
+    "tmdate": 1764737300262,
+    "mdate": 1764737300262,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to EDIT: Early Diffusion Inference Termination for dLLMs Based on Dynamics of Training Gradients",
+    "display_title": "Official Review of Submission3184 by Reviewer KgfN",
+    "content": {
+      "summary": {
+        "value": "This paper proposes EDIT to speed up diffusion-style large language models. The key idea is to reuse training-time optimizer dynamics that are normally discarded: aggregated AdamW statistics on LoRA-B are compressed into a compact per-block “pathway vector” u. During inference, EDIT measures how well current visible-token activations align with u, constructs a distribution over the intersection of visible tokens across consecutive steps, and tracks a matched-support KL divergence. If the KL stays below a threshold δ for Ω consecutive steps, the method early-stops the diffusion process.\nIt provides theoretical support by bounding total-variation distance from KL and using a margin condition to argue that, with suitable (δ, Ω), early stopping will not change the final prediction. Empirically, EDIT reduces denoising steps by 11.8–68.3% on multiple reasoning benchmarks with little to no loss in accuracy. The approach requires only lightweight metadata extracted at training time, no architectural changes at inference, and minimal runtime overhead."
+      },
+      "soundness": {
+        "value": 3
+      },
+      "presentation": {
+        "value": 3
+      },
+      "contribution": {
+        "value": 3
+      },
+      "strengths": {
+        "value": "1.The method is clear, novel and well-supported by theory.\n\n2.Without changing the model's reasoning structure, it enables the addition during training and no modification during inference, which differentiates it from previous efficiency-enhancing methods that require modifying the decoding or architecture.\n\n3.The paper is easy to read, motivations are well connected."
+      },
+      "weaknesses": {
+        "value": "1.The reliance on training metadata requires access to the optimization trajectory during the training phase, which is insufficient for scenarios involving closed-source models or those with only final checkpoint files.\n\n2.Validation focuses on LoRA-SFT, it remains unclear how EDIT performs with full-parameter finetuning, other adapters, or different optimizers \n\n3.Small accuracy dips appear in longer sequences, and the paper does not deeply analyze when EDIT stabilizes too early."
+      },
+      "questions": {
+        "value": "1.Have you tried this method on other optimizers and adapters?\n\n2.Under the influence of prompt form changes, noise disturbances, or adversarial interventions, is it more likely to prematurely stop? Have you ever encountered the situation of prematurely stopping?"
+      },
+      "flag_for_ethics_review": {
+        "value": [
+          "No ethics review needed."
+        ]
+      },
+      "rating": {
+        "value": 6
+      },
+      "confidence": {
+        "value": 3
+      },
+      "code_of_conduct": {
+        "value": "Yes"
+      }
+    },
+    "id": "g9SqENBkQg",
+    "forum": "dQU7OKCagD",
+    "replyto": "dQU7OKCagD",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission3184/Reviewer_KgfN"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission3184/Reviewer_KgfN"
+    ],
+    "number": 4,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission3184/-/Official_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1761990377002,
+    "cdate": 1761990377002,
+    "tmdate": 1762916588412,
+    "mdate": 1762916588412,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission3184 by Reviewer KgfN",
+    "display_title": "Summary: Metadata requirement, Generality tests, and Stability behavior",
+    "content": {
+      "title": {
+        "value": "Summary: Metadata requirement, Generality tests, and Stability behavior"
+      },
+      "comment": {
+        "value": "We thank the reviewer for the thoughtful comments and constructive feedback. We address the points as follows.\n\n# Requirement of training metadata\nWe agree that EDIT depends on the availability of optimizer moment statistics from fine-tuning. This is indeed a limitation: if the optimizer state is not preserved, EDIT cannot be applied. At the same time, these statistics are automatically produced in standard SFT workflows and are inexpensive to store, so EDIT is naturally suited to settings where fine-tuning is performed or where metadata can be retained. We acknowledge this limitation in the Conclusion and Future Directions section, and note that training metadata can support more holistic and efficient inference.\n\n# Applicability beyond LoRA-SFT, and use with other optimizers/adapters\nEDIT relies only on optimizer moments and projection-layer activations, not LoRA-specific structure. To assess compatibility across training setups, we applied EDIT to two variants: (1) switching the optimizer from AdamW to Lion, and (2) switching the adapter from LoRA to DoRA. The Countdown results are shown below.\n\n### (Accuracy) Lion Optimizer + LoRA Adapter\n| Method      | Optimizer | Adapter | Countdown@128 | Countdown@256 | Countdown@512 |\n| ----------- | --------- | ------- | ------------- | ------------- | ------------- |\n| LLaDA (SFT) | Lion      | LoRA    | 33.6          | 21.5          | **30.1**      |\n| EDIT    | Lion      | LoRA    | **34.4**      | **26.6**      | 28.5          |\n\n### (Steps) Lion Optimizer + LoRA Adapter\n| Method      | Optimizer | Adapter | Countdown@128 | Countdown@256 | Countdown@512 |\n| ----------- | --------- | ------- | ------------- | ------------- | ------------- |\n| LLaDA (SFT) | Lion      | LoRA    | 64            | 128           | 256           |\n| EDIT   | Lion      | LoRA    | 33.6          | 30.2          | 192.3         |\n\n### (Accuracy) AdamW Optimizer + DoRA Adapter\n| Method      | Optimizer | Adapter | Countdown@128 | Countdown@256 | Countdown@512 |\n| ----------- | --------- | ------- | ------------- | ------------- | ------------- |\n| LLaDA (SFT) | AdamW     | DoRA    | **36.7**      | 27.3          | **25.4**      |\n| EDIT    | AdamW     | DoRA    | 28.5          | **29.3**      | 24.2          |\n\n### (Steps) AdamW Optimizer + DoRA Adapter\n| Method      | Optimizer | Adapter | Countdown@128 | Countdown@256 | Countdown@512 |\n| ----------- | --------- | ------- | ------------- | ------------- | ------------- |\n| LLaDA (SFT) | AdamW     | DoRA    | 64            | 128           | 256           |\n| **EDIT**    | AdamW     | DoRA    | 44.3          | 40.6          | 135.1         |\n\n# Accuracy dips on longer sequences\n\nThe small accuracy decreases observed on some long-sequence settings reflect differences in how much useful reasoning occurs during later denoising steps. Certain tasks (e.g., Countdown) stabilize earlier in the denoising process, while others (e.g., GSM8K) continue to benefit from additional refinement later on. EDIT halts once the alignment statistics stop changing across consecutive steps, and tasks reach this stability at different points in the denoising process.\nAs a result, the accuracy variation aligns with how different tasks distribute their reasoning over the denoising trajectory. EDIT applies **the same stability rule uniformly**, and its behavior is shaped by the reasoning characteristics of each task.\n\n# Influence of prompt form changes, noise disturbances, or adversarial interventions\nEDIT has not been tested under prompt-format variations, synthetic noise, or adversarial perturbations. The stopping criterion relies on detecting stabilization during inference, and our evaluation focuses on reasoning benchmarks where this setting is most relevant. Extending the study to include controlled perturbations is a constructive suggestion and can be incorporated into follow-up work."
+      }
+    },
+    "id": "8aRZqH0RTm",
+    "forum": "dQU7OKCagD",
+    "replyto": "g9SqENBkQg",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission3184/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission3184/Authors"
+    ],
+    "number": 1,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission3184/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764733522899,
+    "cdate": 1764733522899,
+    "tmdate": 1764734443543,
+    "mdate": 1764734443543,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to EDIT: Early Diffusion Inference Termination for dLLMs Based on Dynamics of Training Gradients",
+    "display_title": "Meta Review of Submission3184 by Area Chair XCaV",
+    "content": {
+      "summary": {
+        "value": "This paper proposes EDIT, an early-termination rule to accelerate inference for diffusion-style language models by reusing training-time optimizer statistics that are typically discarded. The method compresses aggregated optimizer moments (e.g., AdamW statistics on LoRA-B) into a compact per-block signal, and during inference monitors alignment/stability of token activations across denoising steps. EDIT early-stops when a matched-support KL divergence criterion remains below a threshold for a fixed number of consecutive steps. The paper includes a theoretical argument connecting KL bounds to prediction stability, and reports substantial denoising-step reductions (up to ~68%) with small or no accuracy loss on several reasoning benchmarks.\n\nThe reviewers raised several concerns that informed the decision. A central concern is applicability and generality: EDIT requires access to training-time optimizer states/metadata, which may be unavailable for released checkpoints or closed-source models; experiments focus primarily on LoRA-SFT and a single diffusion LLM family (LLaDA-8B), raising questions about robustness across models, sizes, optimizers, adapters, and training recipes. Another major concern is evaluation rigor and baselines: one reviewer argued that the paper initially lacked comparisons to other early-stopping/acceleration methods and that the evaluation potentially confounds gains with task-level hyperparameter tuning, especially since baselines were not similarly tuned for denoising steps. Reviewers also raise concerns that the pipeline’s complex design is insufficiently justified. They argue that comprehensive ablations are required to determine which components are essential, to provide experimental or theoretical justification for each, and to compare against simpler alternatives.\n\nOverall, while some reviewers found the method clear and potentially impactful, the negative assessment highlights remaining doubts about fairness of comparisons, reliance on task-level tuning, breadth of validation, and practical applicability, which leads to an overall recommendation of rejection."
+      },
+      "reviewer_concerns": {
+        "value": "### Concerns addressed by the rebuttal\n\n* **Generality beyond AdamW + LoRA-SFT (KgfN):**\n  The authors report additional experiments switching **AdamW → Lion** (with LoRA) and **LoRA → DoRA** (with AdamW), including accuracy and step statistics on Countdown.\n\n* **End-to-end efficiency metrics (GDvF):**\n  The authors provide **wall time per instance, tokens per second, peak GPU memory**, and step reduction for **Countdown@256**.\n\n* **Diagnostic for long-sequence accuracy drop (GDvF):**\n  For **GSM8K@512**, the authors state they include a histogram of early-stop steps vs correctness (Figure 8, Section C.3) and report the qualitative pattern that correct predictions stop later while incorrect ones stop earlier.\n\n* **Tolerance to moderate hyperparameter mis-tuning (GDvF, 3GSH, uwNg):**\n  The authors state that a **narrow range** of (\\delta) and (\\Omega) (e.g., (\\delta) 0.05–0.1, (\\Omega) 6–12) yields consistent behavior across multiple tasks.\n\n* **Baselines vs other acceleration methods (3GSH):**\n  The authors add comparisons to **Fast-dLLM** and **Prophet** on **GSM8K@256** and **GPQA@256** under a stated 0-shot setting, and comment on the step count comparison for GSM8K@256.\n\n* **Clarification of design choices and “what distribution is over” (uwNg):**\n  The authors clarify the probability distribution is defined over **visible (unmasked) tokens** at a step, and KL is computed on the **intersection** of visible-token sets across consecutive steps after renormalization.\n\n* **Addressing some design-choice critiques (uwNg):**\n  The authors report an ablation using **momentum only** vs “combined update” and claim combined update is more stable and accurate on Countdown.\n\n* **Presentation issues (3GSH):**\n  The authors state they enlarged tables and increased figure font sizes and removed unintended frames in several figures.\n\n### Concerns still outstanding\n\n* **Practical applicability limited by training-metadata requirement (KgfN, 3GSH):**\n  The authors acknowledge that if optimizer states are not preserved, EDIT cannot be applied. This remains a core limitation for settings with only final checkpoints or closed-source models.\n\n* **Breadth of validation across models, sizes, datasets, and hardware (3GSH):**\n  The experiments are still described by the reviewer as centered on **LLaDA-8B** and a limited set of tasks/hardware. The rebuttal characterizes broader evaluation as future work but does not add evidence beyond the reported comparisons.\n\n* **Task-level tuning burden and fairness of comparisons (3GSH, uwNg):**\n  A key criticism is that ((\\delta,\\Omega,\\tau_{blk})) are **selected per task via validation**, which introduces tuning overhead and potential brittleness. The authors argue a narrow parameter range works broadly and that EDIT can run with defaults, but the method still uses **task-level selection** in the reported results.\n  Additionally, uwNg questions whether baselines should also be tuned for number of diffusion steps and notes that EDIT’s step count can fall below the smallest baseline step budget tested. The authors respond that baselines use default schedules and are not retuned, but this does not resolve the reviewer’s fairness concern (i.e., asymmetry in tuning/search over step counts).\n\n* **Stronger comparative evaluation vs simple early-stopping heuristics (uwNg):**\n  uwNg highlights missing comparisons to output-level heuristics (e.g., confidence/entropy/output stability) and other alternative early-stopping ideas, and expresses concern that accuracy improvements could reflect tuning effects rather than principled stopping. The rebuttal explains why EDIT uses training-aligned signals but does not provide the requested empirical comparisons to those alternative early-stopping baselines.\n\n* **Concerns about theory/intuition being ad hoc or insufficient (3GSH, uwNg):**\n  While the authors provide intuition for the optimizer-derived vector and the stability criterion, reviewers’ concerns about the theory being “ad-hoc” and the need for deeper rigor/alternative scoping (e.g., oracle optimal steps, maximum attainable speedups, broader ablations of design choices) are only partially addressed."
+      },
+      "reviewer_scores": {
+        "value": "* **Reviewer KgfN (score: 6):**\n  Likely unchanged. The rebuttal directly addresses two key questions (other optimizers/adapters; accuracy dips explanation) with added experiments and clarifications, but the reviewer already indicated “would not mind if rejected,” and the metadata-availability limitation remains.\n\n* **Reviewer GDvF (score: 6):**\n  Likely unchanged. The rebuttal provides exactly what was requested: end-to-end system metrics and a GSM8K@512 diagnostic histogram, plus a statement about hyperparameter tolerance.\n\n* **Reviewer 3GSH (score: 4):**\n  Likely slightly higher or unchanged. The rebuttal addresses several major complaints: adds comparisons to Fast-dLLM/Prophet, clarifies intuition, discusses domain shift qualitatively, and commits presentation fixes. However, the reviewer’s core concerns about limited scope (single model family), task-tuned thresholds, and perceived ad-hoc theory are only partially resolved.\n\n* **Reviewer uwNg (score: 2):**\n  Likely unchanged. Although the rebuttal answers specific technical questions (distribution support, ablation on momentum-only, clarification that Q/K/V across layers are used, and baseline comparisons added elsewhere), uwNg’s principal objections center on lack of rigorous scoping and alternative baselines, and especially the fairness issue around task-level tuning and step-budget comparisons; the rebuttal does not provide the broader early-stopping heuristic comparisons or the baseline step-vs-accuracy curves requested in spirit.\n\nTaken together, while two reviewers are moderately positive and the rebuttal meaningfully improves completeness (metrics, diagnostics, some comparisons), the remaining concerns, particularly around **task-level tuning/fairness, limited robustness testing, and metadata dependence**, is considered a major drawback and prevents the paper from reaching the overall acceptance threshold."
+      }
+    },
+    "id": "Chcv1kNjaB",
+    "forum": "dQU7OKCagD",
+    "replyto": "dQU7OKCagD",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission3184/Area_Chair_XCaV"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission3184/Senior_Area_Chairs",
+      "ICLR.cc/2026/Conference/Submission3184/Area_Chair_XCaV"
+    ],
+    "number": 1,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission3184/-/Meta_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1767686014353,
+    "cdate": 1767686014353,
+    "tmdate": 1770618900345,
+    "mdate": 1770618900345,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Meta_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to EDIT: Early Diffusion Inference Termination for dLLMs Based on Dynamics of Training Gradients",
+    "display_title": "Paper Decision",
+    "content": {
+      "title": {
+        "value": "Paper Decision"
+      },
+      "decision": {
+        "value": "Reject"
+      },
+      "comment": {
+        "value": ""
+      }
+    },
+    "id": "MAOQIMB2Tv",
+    "forum": "dQU7OKCagD",
+    "replyto": "dQU7OKCagD",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Program_Chairs"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Program_Chairs"
+    ],
+    "number": 1,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission3184/-/Decision",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1769416539394,
+    "cdate": 1769416539394,
+    "tmdate": 1770353552705,
+    "mdate": 1770353552705,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Decision",
+    "license": "CC BY 4.0",
+    "version": 2
+  }
+]
