@@ -1,0 +1,701 @@
+[
+  {
+    "replying_to": "Replying to You Do Not Fully Utilize Transformer's Representation Capacity",
+    "display_title": "Official Review of Submission24293 by Reviewer 8E6q",
+    "content": {
+      "summary": {
+        "value": "This paper identifies \"representation collapse\" as a key weakness in standard Transformer decoders, where the reliance on a single residual stream from the immediately preceding layer forces the model to compress all prior information, leading to a loss of feature diversity in deeper layers. To address this, the authors propose LIMe, a lightweight architectural modification. LIMe allows each attention head at every layer to compute its KV representations by routing and mixing the KV buffers from all preceding layers, not just the current one. This is achieved by learning a per-head, per-layer routing matrix that weights the contributions of past layers."
+      },
+      "soundness": {
+        "value": 3,
+        "description": "3: good"
+      },
+      "presentation": {
+        "value": 2,
+        "description": "2: fair"
+      },
+      "contribution": {
+        "value": 3,
+        "description": "3: good"
+      },
+      "strengths": {
+        "value": "- The primary strength of LIMe is its elegance and low overhead. By reusing existing KV buffers, it adds multi-layer information flow with almost no additional memory and a negligible computational cost (especially when GQA is used). This makes it a very practical and \"drop-in\" friendly modification.\n\n-  The paper does an excellent job of clearly identifying a specific problem (representation collapse) and proposing a solution (LIMe) that directly targets it."
+      },
+      "weaknesses": {
+        "value": "- The authors correctly identify in the limitations that the vanilla implementation of the router has an $\\mathcal{O}(L^2)$ asymptotic complexity (where $L$ is the number of layers), as each layer's router must process keys from all $L-1$ previous layers. This is fine for the 16-layer models in the main paper, but it will become a significant computational bottleneck for scaling to very deep models (e.g., $L=100+$). The heuristic ablations in Appendix F (e.g., last-j or first-j) all show worse performance, suggesting a difficult trade-off between performance and scalability.\n- The method's core idea, accessing all previous KV caches, creates a practical implementation challenge for large-scale training. In a standard pipeline parallel setup, this would require significant communication across pipeline stages (GPUs), as later layers would need to fetch KV caches from all earlier GPUs. The authors acknowledge this and their preliminary test shows a ~7.8% latency overhead. This practical hurdle might deter adoption for training SOTA-scale models, as it requires \"non-trivial engineering effort\" to optimize."
+      },
+      "questions": {
+        "value": "Please refer to my weakness part."
+      },
+      "flag_for_ethics_review": {
+        "value": [
+          "No ethics review needed."
+        ],
+        "descriptions": [
+          "No ethics review needed."
+        ]
+      },
+      "rating": {
+        "value": 6,
+        "description": "6: marginally above the acceptance threshold. But would not mind if paper is rejected"
+      },
+      "confidence": {
+        "value": 3,
+        "description": "3: You are fairly confident in your assessment. It is possible that you did not understand some parts of the submission or that you are unfamiliar with some pieces of related work. Math/other details were not carefully checked."
+      },
+      "code_of_conduct": {
+        "value": "Yes",
+        "description": "Yes"
+      }
+    },
+    "id": "GVt58opRIr",
+    "forum": "1CoJWNcpmm",
+    "replyto": "1CoJWNcpmm",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission24293/Reviewer_8E6q"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission24293/Reviewer_8E6q"
+    ],
+    "number": 1,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission24293/-/Official_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1761848197754,
+    "cdate": 1761848197754,
+    "tmdate": 1762943032608,
+    "mdate": 1762943032608,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission24293 by Reviewer 8E6q",
+    "display_title": "Official Comment by Authors",
+    "content": {
+      "comment": {
+        "value": "Thank you for the positive and detailed review.\n\n**W1.** We acknowledge that naïve LIMe has $O(L^2)$ routing in the number of layers ($L$), and that the phrase “negligible overhead” requires clarification and context. For our primary 16-layer experiments at the 1 B-parameter scale, LIMe with GQA adds approximately **+1.16 % latency** and **~0% memory overhead** relative to the baseline. We will revise our wording to explicitly specify that regime.\n\n| Model | Time / iter (ms) | Peak Mem (MB) | Perplexity |\n| --- | --- | --- | --- |\n| LLaMA | 70.21 | 2054.26 | 23.73 |\n| LIMe full | 80.85 (+15.2%) | 2062.38 (+0.4%) | 20.72 (–12.7%) |\n| LIMe, dilation=8 | 71.59 (+2.0%) | 2055.38 (+0.05%) | 21.61 (–8.9%) |\n| LIMe, dilation=16 | 71.57 (+1.9%) | 2054.88 (+0.03%) | 21.84 (–8.0%) |\n| LIMe, first-7 | 71.79 (+2.3%) | 2054.85 (+0.03%) | 20.55 (–13.4%) |\n| LIMe, first-15 | 72.69 (+3.5%) | 2055.76 (+0.07%) | 20.50 (–13.6%) |\n\nWe also trained a **128-layer model** with several routing variants. The full LIMe (routing over *all* previous layers) improved perplexity from 23.73 (LLaMA) to 20.72 (–12.7 %) but increased per-step time by +15.2 %. However, lighter variants dramatically reduce both time and memory overhead, especially the **first-j routers** (where each layer reroutes to the first j layers plus itself), which scale **linearly in L** rather than quadratically, and indeed **outperform full LIMe**:\n\n- **first‑7:** 71.79 ms (+2.3 %), 20.55 perplexity (–13.4 %);\n- **first‑15:** 72.69 ms (+3.5 %), 20.50 perplexity (–13.6 %).\n\nDilated routers (e.g., dilation = 8 or 16) have ~+2% time overhead and <0.1% memory overhead, while achieving 8–9% perplexity reductions. Figures 5 and 9 show that the router tends to concentrate most weight on **early layers**. In the 128-layer case, full LIMe forces the router to consider all L layers, so early-layer weights must adapt to noisier mid-layers, which slightly hurts performance. Restricting routing to the first j layers retains most of the informative early KVs and discards noisier mid-layers — this explains why first-j variants outperform both full and dilation variants.\n\nIn summary, while naïve $O(L^2)$ routing becomes expensive at large depth, LIMe does **not** require it: linear-in-depth routing (e.g., first-j) retains essentially all the perplexity gains while incurring only ~2–3.5% latency and ~0% memory overhead even at 128 layers."
+      }
+    },
+    "id": "sxtbTDmBLx",
+    "forum": "1CoJWNcpmm",
+    "replyto": "GVt58opRIr",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission24293/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission24293/Authors"
+    ],
+    "number": 6,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission24293/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1763754346168,
+    "cdate": 1763754346168,
+    "tmdate": 1763754346168,
+    "mdate": 1763754346168,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission24293 by Reviewer 8E6q",
+    "display_title": "Official Comment by Authors",
+    "content": {
+      "comment": {
+        "value": "**W2.** We agree with the reviewer that pipeline-parallel training introduces additional practical costs for LIMe’s KV routing, and we appreciate the prompt. Our prototype implementation uses a simple 1F1B schedule for an 8 B-parameter model over 8 pipeline stages and observes a **+7.8%** increase in step time (1130 vs 1048 ms). We acknowledge this as a **moderate but real limitation**, and we will clarify this as such in the revision. At the same time, we emphasise four supporting points:\n\n1. **Relevance of pipeline parallelism.** Pipeline parallelism splits the model’s layers across multiple devices and transfers activations/states between stages; it is typically employed when a model *cannot* fit comfortably under pure data or tensor parallelism. For the 1B–32B regime, many widely-used deployments and training recipes rely solely on data or FSDP-style sharding (without pipeline parallelism), so in those settings, LIMe’s overhead is ~1–2% with GQA and zero in memory, making it effective for real production usage. 3D parallelism (data × tensor × pipeline) is typically required only at scales closer to hundreds-of-billions or trillion-parameter models [1, 2, 3].\n2. **No additional persistent state beyond existing KVs.** Even under pipeline parallelism, LIMe does *not* introduce new large persistent buffers: we reuse the KV buffers that are already stored during standard attention in each pipeline stage. Our router simply reads from and blends these KVs, adding modest extra traffic that can be overlapped with computation.\n3. **Compatibility with existing pipeline optimisations.** Scheduling algorithms like PipeDream [4] and its improved 1F1B schedule reduce pipeline bubbles by interleaving forward and backward passes across micro-batches; more advanced systems like PipeTransformer [5] employ adaptive layer freezing and elastic pipelining to deliver speedups without accuracy loss, while memory-balanced strategies like BPipe [2] enable asynchronous activation transfer to overlap communication with computation. LIMe is orthogonal to these developments and can benefit from overlapping its communication with computation in the same way.\n4. **Reduced overhead of simpler routers.** As noted above, simpler routers (e.g., first-j) match or even outperform full LIMe in deeper models while reducing routing complexity from $O(L^2)$ to effectively $O(L)$. In a pipeline-parallel setup this means each stage only needs KVs from a small, fixed subset of earlier layers, so LIMe can be deployed with bounded, localised KV reuse and significantly lower cross-stage communication than the naïve “all previous layers” variant.\n\nWe will therefore revise the paper to clarify that our “negligible overhead” claim is **targeted at non-pipelined models up to hundreds of billions of parameters**, present the +7.8% overhead as a **limitation specific to pipeline-parallel training of very large models**, and note that pipeline-aware scheduling (or simpler routers) can reduce it further. We thank the reviewer for prompting us to sharpen and contextualise these claims.\n\nWe have expanded on all aspects you highlighted, and we kindly ask that you consider raising the score.\n\n**References**\n\n[1] Megatron-LM: Training Multi-Billion Parameter Language Models Using Model Parallelism, Shoeybi M. et al. (2019)\n\n[2] BPipe: Memory-Balanced Pipeline Parallelism for Training Large Language Models, Kim T. et al. (2023)\n\n[3] Advances of Pipeline Model Parallelism for Deep Learning Training: An Overview, Guan L. et al. (2024) \n\n[4] PipeDream: Generalized Pipeline Parallelism for DNN Training, Narayanan D. et al. (2019)\n\n[5] PipeTransformer: Automated Elastic Pipelining for Distributed Training of Large-scale Models, He C. et al. (2021)"
+      }
+    },
+    "id": "O3NoW6HM6U",
+    "forum": "1CoJWNcpmm",
+    "replyto": "GVt58opRIr",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission24293/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission24293/Authors"
+    ],
+    "number": 7,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission24293/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1763754376487,
+    "cdate": 1763754376487,
+    "tmdate": 1763754376487,
+    "mdate": 1763754376487,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to You Do Not Fully Utilize Transformer's Representation Capacity",
+    "display_title": "Official Review of Submission24293 by Reviewer nGJ6",
+    "content": {
+      "summary": {
+        "value": "This paper starts from the observation that in standard transformer networks, there is a single residual stream, meaning that the representations from all the previous layers are compressed into a single hidden state. This single hidden state is then used as the input of the next layer. This can lead to *representation collapse*, which is the phenomenon where different tokens become undistinguishable. Hence, this paper propose a new mechanism to address this issue, called LIMe. The idea is that each layer can attend to the representations of *all* previous layers, instead of just the immediante previous one. In practice, this is done by modifying the way keys and values are computed. Instead of just using the keys and values computed from the input of the current layer, the keys and values from all previous layers are linearly combined, using trainable weights. Said otherwise, the keys and values of used in the attention of layer L are obtained by doing a linear combination of the keys and values of all the heads of the previous layers. The weight of this linear combination are fixed trainable parameters.\n\nThe proposed method is then empirically evaluated on different language modeling tasks. First, a LLaMa like model, with 1B parameters is trained on 50B tokens, and evaluated on downstream NLP tasks such as QNLI, WiC or ARC (easy/challenge). Here the experiments show that LIMe obtain better performance than the standard transformer architecture, as well as other approaches such as DenseFormer or HyperConnections. Then the model is compared to the standard transfomer on GSM8k or synthetic tasks such as arithmetic expression evaluation, again showing that LIMe performs better than the baseline. There are also ablations studying the *representation collapse* showing that LIMe is less prone to representation collapse than standard transformers."
+      },
+      "soundness": {
+        "value": 3,
+        "description": "3: good"
+      },
+      "presentation": {
+        "value": 2,
+        "description": "2: fair"
+      },
+      "contribution": {
+        "value": 2,
+        "description": "2: fair"
+      },
+      "strengths": {
+        "value": "I am a bit of the fence regarding this paper.\n\nIn terms of strengths, I believe that the proposed idea in the paper is simple and elegant. The paper is clearly written and easy to follow. The experimental evaluations are convincing."
+      },
+      "weaknesses": {
+        "value": "My main concern with the paper is its relation to previous work, and especially its significance with respect to these.\n\nFirst, I believe that the paper does not make a great job discussing the difference with previous work such as DenseFormer, or Value Residual Learning. More precisely, I think that the idea of combining the representations from multiple previous layers instead of just using the representation from the previous layer is not new. The contributions of the paper are thus mostly about details of how this idea is implemented in practice, and the paper could do a better job at discussing these. Moreover, I believe that the baseline considered in the paper (DenseFormer, HyperConnection) have multiple variant considered in the original papers, and the details of which one is used are missing. Finally, I am a bit surprised that the baseline (such as DenseFormer) does not seem to improve compared to the standard transformer, which goes against the claim of the original paper.\n\nAnother minor concern is the additional runtime required by the method, as it needs to read significantly more activations from memory compared to the standard transformer. \n\n**Additional references**\n\n*MUDDFormer: Breaking Residual Bottlenecks in Transformers via Multiway Dynamic Dense Connections.* Da Xiao, Qingye Meng, Shengping Li, Xingyuan Yuan. 2025.\n\n*Value Residual Learning.* Zhanchao Zhou, Tianyi Wu, Zhiyun Jiang, Fares Obeid, Zhenzhong Lan. 2024\n\n*LAUREL: Learned Augmented Residual Layer.* Gaurav Menghani, Ravi Kumar, Sanjiv Kumar. 2024\n\n*DeepCrossAttention: Supercharging Transformer Residual Connections.* Mike Heddes, Adel Javanmard, Kyriakos Axiotis, Gang Fu, MohammadHossein Bateni, Vahab Mirrokni. 2025"
+      },
+      "questions": {
+        "value": "Which variant of DenseFormer and HyperConnection did you use?\n\nDid you re-implement the baselines yourself or use existing code?"
+      },
+      "flag_for_ethics_review": {
+        "value": [
+          "No ethics review needed."
+        ],
+        "descriptions": [
+          "No ethics review needed."
+        ]
+      },
+      "rating": {
+        "value": 4,
+        "description": "4: marginally below the acceptance threshold. But would not mind if paper is accepted"
+      },
+      "confidence": {
+        "value": 4,
+        "description": "4: You are confident in your assessment, but not absolutely certain. It is unlikely, but not impossible, that you did not understand some parts of the submission or that you are unfamiliar with some pieces of related work."
+      },
+      "code_of_conduct": {
+        "value": "Yes",
+        "description": "Yes"
+      }
+    },
+    "id": "SupanSNIuT",
+    "forum": "1CoJWNcpmm",
+    "replyto": "1CoJWNcpmm",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission24293/Reviewer_nGJ6"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission24293/Reviewer_nGJ6"
+    ],
+    "number": 2,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission24293/-/Official_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1761923685771,
+    "cdate": 1761923685771,
+    "tmdate": 1762943032296,
+    "mdate": 1762943032296,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission24293 by Reviewer nGJ6",
+    "display_title": "Official Comment by Authors",
+    "content": {
+      "comment": {
+        "value": "Thank you for the constructive and thorough review.\n\n**W1.** We agree that our method LIMe lies in the broader family of transformer modifications that reuse earlier-layer representations (e.g., DenseFormer, HyperConnections, and Value Residual Learning). We have accordingly expanded the Related Work section to reflect these connections.\n\nOur contribution lies in **how** we perform this reuse, and **what effect** it has:\n\n1. DenseFormer aggregates hidden states from previous layers and therefore must retain them in memory, whereas LIMe mixes per-head query-key/value (K/V) projections and reuses the existing K/V cache buffer, thus incurring no additional activation memory. Moreover, LIMe performs **per-head mixing across layers and heads**, and in Appendix F we now demonstrate that removing cross-head mixing degrades performance:\n    \n    \n    | Setup | Loss | Perplexity |\n    | --- | --- | --- |\n    | LLaMa | 2.80043 | 16.45 |\n    | LIMe default | 2.76889 | 15.94 (-3.1%) |\n    | LIMe no head mix | 2.83235 | 16.99 (+3.3%) |\n2. The Value Residual Learning family (e.g., ResFormer/SVFormer) effectively reuses only the first layer’s values across depth; by contrast, LIMe generalises this to a learned per-head routing over K/Vs **from all previous layers** (or a subset such as first-j/dilated variants) and across heads. Empirically, we link this more flexible routing mechanism to reduced representation collapse and improved downstream performance.\n\nRegarding baseline details:\n\n- We train the DenseFormer variant with dilation = 1 and period = 1.\n- For HyperConnections, we adopt the Dynamic variant with expansion rate 4 (the best configuration reported in their original work).\n\nRegarding benchmark performance: although DenseFormer obtains a marginally better perplexity than LIMe and LLaMa (as in the original paper), this advantage does **not** translate into better downstream performance on language modeling benchmarks. We have added this table and discussion in Section 5 and Appendix A.\n\n| Model | Perplexity |\n| --- | --- |\n| LLaMA | 11.56 |\n| LIMe | 11.47 (–0.8%) |\n| DenseFormer | 11.36 (–1.7%) |\n| HyperConnections | 11.25 (–2.7%) |\n\n**W2.** We measured training latency on 1B-parameter models and report results in Table 14 (Appendix I). The results show that the overhead introduced by LIMe is negligible: on average, we observe a 1.16 % increase in per-iteration time, and near-zero extra memory is required.\n\n**Q1.** As noted above, for DenseFormer we used dilation = 1, period = 1; for HyperConnections we used the Dynamic variant with expansion rate 4. These specifications will be stated in the updated manuscript (Appendix A).\n\n**Q2.** We used the official implementation of DenseFormer from their GitHub repository. HyperConnections was implemented as described in the original paper (we used their released code). We clarify this in Section 4.2 of the revised submission.\n\nWe have responded fully to each concern, and we respectfully request that you consider raising the score."
+      }
+    },
+    "id": "l0GKVd2L2k",
+    "forum": "1CoJWNcpmm",
+    "replyto": "SupanSNIuT",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission24293/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission24293/Authors"
+    ],
+    "number": 5,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission24293/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1763754277442,
+    "cdate": 1763754277442,
+    "tmdate": 1763754277442,
+    "mdate": 1763754277442,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to You Do Not Fully Utilize Transformer's Representation Capacity",
+    "display_title": "Official Review of Submission24293 by Reviewer vzV7",
+    "content": {
+      "summary": {
+        "value": "This paper proposes Layer-Integrated Memory (LIMe), which allows each attention head to access Key-Value representations from all previous layers through learned routing weights."
+      },
+      "soundness": {
+        "value": 4,
+        "description": "4: excellent"
+      },
+      "presentation": {
+        "value": 3,
+        "description": "3: good"
+      },
+      "contribution": {
+        "value": 3,
+        "description": "3: good"
+      },
+      "strengths": {
+        "value": "Comprehensive experimental design: The evaluation spans multiple dimensions: language modeling perplexity, mathematical reasoning on GSM8K, and synthetic tasks with controlled difficulty levels. The representation collapse analysis combines entropy measurements, linear separability tests, and grammatical probing to validate the core hypothesis from different angles. The routing weight analysis provides interpretability by revealing which layer representations the model prefers to access. This is the most lovely part of this paper."
+      },
+      "weaknesses": {
+        "value": "1. Limited novelty over prior work. The core mechanism of using learned weights to aggregate multi-layer representations appears in Transparent Attention (Bapna et al., EMNLP 2018), which uses trainable softmax-normalized weights to combine encoder layer outputs in NMT decoder cross-attention. The mathematical formulation resembles that prior work, with the main difference being application to decoder-only self-attention. More recently, Hyper-Connections (Zhu et al., Sept 2024) addresses representation collapse through multi-stream connections with learned routing, sharing similar motivation. The paper does not clearly articulate what architectural insight LIMe provides beyond adapting these known techniques to decoder-only models with efficient KV buffer reuse.\n2. Unclear computational cost analysis. The paper claims \"negligible overhead\" yet mentions O(L**2) routing complexity in limitations. For a 64-layer model, each layer must route over 64 previous layer KV pairs, but the paper does not provide memory bandwidth analysis for this case. The pipeline parallelism overhead of 7.8% contradicts the \"negligible\" claim for production scenarios."
+      },
+      "questions": {
+        "value": "N/A"
+      },
+      "flag_for_ethics_review": {
+        "value": [
+          "No ethics review needed."
+        ],
+        "descriptions": [
+          "No ethics review needed."
+        ]
+      },
+      "rating": {
+        "value": 4,
+        "description": "4: marginally below the acceptance threshold. But would not mind if paper is accepted"
+      },
+      "confidence": {
+        "value": 4,
+        "description": "4: You are confident in your assessment, but not absolutely certain. It is unlikely, but not impossible, that you did not understand some parts of the submission or that you are unfamiliar with some pieces of related work."
+      },
+      "code_of_conduct": {
+        "value": "Yes",
+        "description": "Yes"
+      }
+    },
+    "id": "0XAZPOMqvX",
+    "forum": "1CoJWNcpmm",
+    "replyto": "1CoJWNcpmm",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission24293/Reviewer_vzV7"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission24293/Reviewer_vzV7"
+    ],
+    "number": 3,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission24293/-/Official_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1762155233863,
+    "cdate": 1762155233863,
+    "tmdate": 1762943032091,
+    "mdate": 1762943032091,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission24293 by Reviewer vzV7",
+    "display_title": "Official Comment by Authors",
+    "content": {
+      "comment": {
+        "value": "Thank you for the careful and insightful review.\n\n**W1.** We acknowledge that LIMe is conceptually related to earlier work that aggregates multi-layer representations (e.g., Transparent Attention, DenseFormer, and Hyper‑Connections). Specifically, Transparent Attention uses trainable softmax-normalized weights to combine encoder layer outputs in cross-attention, while DenseFormer/Hyper-Connections aggregate multi-layer signals in other ways.\n\nLIMe shares the high-level idea of re-using past representations, but it differs in **three key ways**:\n\n1. It uses a **simple per-head router** instead of multiple residual streams or heavy mixing modules, making it **lighter and faster** than methods such as Hyper-Connections.\n2. It operates directly on **key–value projections** and **reuses the existing KV cache**, so at the 1 B parameter scale it adds essentially **no extra activation memory** compared to the baseline.\n3. It performs **per-head mixing across both layers and heads**, which we show in ablation studies is important and provides a more expressive yet still efficient routing mechanism.\n\nIn addition, our work contributes an extensive empirical analysis of **representation collapse** (measured via entropy, separability, probing), demonstrating that this specific KV-based routing not only belongs to that family of methods, but also **yields clear, well-characterised benefits in decoder-only language models**.\n\n**W2.** We agree that naïve LIMe has $O(L^2)$ routing in the number of layers ($L$), and that the phrase “negligible overhead” requires clarification and context. For our primary 16-layer experiments at the 1 B-parameter scale, LIMe with GQA adds approximately **+1.16 % latency** and **~0% memory overhead** relative to the baseline. We will revise our wording to explicitly specify that regime.\n\n| Model | Time / iter (ms) | Peak Mem (MB) | Perplexity |\n| --- | --- | --- | --- |\n| LLaMA | 70.21 | 2054.26 | 23.73 |\n| LIMe full | 80.85 (+15.2%) | 2062.38 (+0.4%) | 20.72 (–12.7%) |\n| LIMe, dilation=8 | 71.59 (+2.0%) | 2055.38 (+0.05%) | 21.61 (–8.9%) |\n| LIMe, dilation=16 | 71.57 (+1.9%) | 2054.88 (+0.03%) | 21.84 (–8.0%) |\n| LIMe, first-7 | 71.79 (+2.3%) | 2054.85 (+0.03%) | 20.55 (–13.4%) |\n| LIMe, first-15 | 72.69 (+3.5%) | 2055.76 (+0.07%) | 20.50 (–13.6%) |\n\nWe also trained a **128-layer model** with several routing variants. The full LIMe (routing over *all* previous layers) improved perplexity from 23.73 (LLaMA) to 20.72 (–12.7 %) but increased per-step time by +15.2 %. However, lighter variants dramatically reduce both time and memory overhead, especially the **first-j routers** (where each layer reroutes to the first j layers plus itself), which scale **linearly in L** rather than quadratically, and indeed **outperform full LIMe**:\n\n- **first‑7:** 71.79 ms (+2.3 %), 20.55 perplexity (–13.4 %);\n- **first‑15:** 72.69 ms (+3.5 %), 20.50 perplexity (–13.6 %).\n\nDilated routers (e.g., dilation = 8 or 16) have ~+2% time overhead and <0.1% memory overhead, while achieving 8–9% perplexity reductions. Figures 5 and 9 show that the router tends to concentrate most weight on **early layers**. In the 128-layer case, full LIMe forces the router to consider all L layers, so early-layer weights must adapt to noisier mid-layers, which slightly hurts performance. Restricting routing to the first j layers retains most of the informative early KVs and discards noisier mid-layers — this explains why first-j variants outperform both full and dilation variants.\n\nIn summary, while naïve $O(L^2)$ routing becomes expensive at large depth, LIMe does **not** require it: linear-in-depth routing (e.g., first-j) retains essentially all the perplexity gains while incurring only ~2–3.5% latency and ~0% memory overhead even at 128 layers."
+      }
+    },
+    "id": "Ah51hK7vac",
+    "forum": "1CoJWNcpmm",
+    "replyto": "0XAZPOMqvX",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission24293/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission24293/Authors"
+    ],
+    "number": 3,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission24293/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1763754169590,
+    "cdate": 1763754169590,
+    "tmdate": 1763754169590,
+    "mdate": 1763754169590,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission24293 by Reviewer vzV7",
+    "display_title": "Official Comment by Authors",
+    "content": {
+      "comment": {
+        "value": "We agree with the reviewer that pipeline-parallel training introduces additional practical costs for LIMe’s KV routing, and we appreciate the prompt. Our prototype implementation uses a simple 1F1B schedule for an 8 B-parameter model over 8 pipeline stages and observes a **+7.8%** increase in step time (1130 vs 1048 ms). We acknowledge this as a **moderate but real limitation**, and we will clarify this as such in the revision. At the same time, we emphasise four supporting points:\n\n1. **Relevance of pipeline parallelism.** Pipeline parallelism splits the model’s layers across multiple devices and transfers activations/states between stages; it is typically employed when a model *cannot* fit comfortably under pure data or tensor parallelism. For the 1B–32B regime, many widely-used deployments and training recipes rely solely on data or FSDP-style sharding (without pipeline parallelism), so in those settings, LIMe’s overhead is ~1–2% with GQA and zero in memory, making it effective for real production usage. 3D parallelism (data × tensor × pipeline) is typically required only at scales closer to hundreds-of-billions or trillion-parameter models [1, 2, 3].\n2. **No additional persistent state beyond existing KVs.** Even under pipeline parallelism, LIMe does *not* introduce new large persistent buffers: we reuse the KV buffers that are already stored during standard attention in each pipeline stage. Our router simply reads from and blends these KVs, adding modest extra traffic that can be overlapped with computation.\n3. **Compatibility with existing pipeline optimisations.** Scheduling algorithms like PipeDream [4] and its improved 1F1B schedule reduce pipeline bubbles by interleaving forward and backward passes across micro-batches; more advanced systems like PipeTransformer [5] employ adaptive layer freezing and elastic pipelining to deliver speedups without accuracy loss, while memory-balanced strategies like BPipe [2] enable asynchronous activation transfer to overlap communication with computation. LIMe is orthogonal to these developments and can benefit from overlapping its communication with computation in the same way.\n4. **Reduced overhead of simpler routers.** As noted above, simpler routers (e.g., first-j) match or even outperform full LIMe in deeper models while reducing routing complexity from $O(L^2)$ to effectively $O(L)$. In a pipeline-parallel setup this means each stage only needs KVs from a small, fixed subset of earlier layers, so LIMe can be deployed with bounded, localised KV reuse and significantly lower cross-stage communication than the naïve “all previous layers” variant.\n\nWe will therefore revise the paper to clarify that our “negligible overhead” claim is **targeted at non-pipelined models up to hundreds of billions of parameters**, present the +7.8% overhead as a **limitation specific to pipeline-parallel training of very large models**, and note that pipeline-aware scheduling (or simpler routers) can reduce it further. We thank the reviewer for prompting us to sharpen and contextualise these claims.\n\nWe have clarified all raised points in depth, and we would greatly appreciate it if you could consider increasing the score.\n\n**References**\n\n[1] Megatron-LM: Training Multi-Billion Parameter Language Models Using Model Parallelism, Shoeybi M. et al. (2019)\n\n[2] BPipe: Memory-Balanced Pipeline Parallelism for Training Large Language Models, Kim T. et al. (2023)\n\n[3] Advances of Pipeline Model Parallelism for Deep Learning Training: An Overview, Guan L. et al. (2024) \n\n[4] PipeDream: Generalized Pipeline Parallelism for DNN Training, Narayanan D. et al. (2019)\n\n[5] PipeTransformer: Automated Elastic Pipelining for Distributed Training of Large-scale Models, He C. et al. (2021)"
+      }
+    },
+    "id": "XEoBYr2tbR",
+    "forum": "1CoJWNcpmm",
+    "replyto": "0XAZPOMqvX",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission24293/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission24293/Authors"
+    ],
+    "number": 4,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission24293/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1763754204335,
+    "cdate": 1763754204335,
+    "tmdate": 1763754204335,
+    "mdate": 1763754204335,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to You Do Not Fully Utilize Transformer's Representation Capacity",
+    "display_title": "Official Review of Submission24293 by Reviewer Ax1G",
+    "content": {
+      "summary": {
+        "value": "The paper suggests adding a weighted average after the standard key projection. The average is taken over all the key representations of the current token in the current layer and head as well as the previous ones (over $i * h$ vectors in the $i$-th layer with a model having $h$ kv heads). The same is done for the values (but not the queries). The coefficient of weighted average is shared between keys and values. Results show improvement over baseline (as well as DenseFormer and HyperConnections) on downstream tasks. Particularly, there is a signficant boost in accuracy over Arithmetic Expression Task which is attributed to the ability to store more information needed for reasoning. Additionally the authors show that the representation remains linearly separable even in later layers which is not true about the baseline."
+      },
+      "soundness": {
+        "value": 3,
+        "description": "3: good"
+      },
+      "presentation": {
+        "value": 2,
+        "description": "2: fair"
+      },
+      "contribution": {
+        "value": 3,
+        "description": "3: good"
+      },
+      "strengths": {
+        "value": "While the method shares similarity with existing methods such as DenseFormer, the correct placement of weighted averages is important and in addition to superior performance on the experiments, yields side-benefits such as the ability to re-use the KV cache. The authors report additional investigative results such as the analysis done on the learned router weights."
+      },
+      "weaknesses": {
+        "value": "In Section 5.1, it would be very helpful to have the random baseline for each task. In particular, that results that are reported for several of tasks seem near-chance (e.g. WiC). There is also no confidence intervals reported which makes it very hard to determine the significance of the improvements. Overall this makes me question the efficacy of the method in general language modeling.\n\nIt is confusing to refer to LLaMA in Table 1. Based on my understanding, this is only a model with the same base architecture as LLaMA models where as a LLaMa baseline suggests the pre-trained models. I strongly suggest to make this clear since based on my understanding you are training everything from scratch.\n\nI have asked additional questions below. Overall, I am uncertain about the intepretation of the provided results and whether they can currently clearly establish the effectiveness of the proposed method."
+      },
+      "questions": {
+        "value": "1. When doing value classification (e.g. in Fig. 2b) is the rest of the model frozen?\n\n2. Did you consider using a per-dimension (instead of per-head) weighted average? Was there any difference in performance? Alternatively, is it important to average across heads or is it enough to average over the same head across different layers? \n\n3. DenseFormer does a similar mixing as the proposed method. Still, the results for DenseFormer are sometimes even worse than the baseline. Also, Denseformer paper reports reasonable improvements over the baseline. Why similar consistent improvements are not observed in these new set of experiments?"
+      },
+      "flag_for_ethics_review": {
+        "value": [
+          "No ethics review needed."
+        ],
+        "descriptions": [
+          "No ethics review needed."
+        ]
+      },
+      "rating": {
+        "value": 4,
+        "description": "4: marginally below the acceptance threshold. But would not mind if paper is accepted"
+      },
+      "confidence": {
+        "value": 3,
+        "description": "3: You are fairly confident in your assessment. It is possible that you did not understand some parts of the submission or that you are unfamiliar with some pieces of related work. Math/other details were not carefully checked."
+      },
+      "code_of_conduct": {
+        "value": "Yes",
+        "description": "Yes"
+      }
+    },
+    "id": "2BlHNIBl7g",
+    "forum": "1CoJWNcpmm",
+    "replyto": "1CoJWNcpmm",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission24293/Reviewer_Ax1G"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission24293/Reviewer_Ax1G"
+    ],
+    "number": 4,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission24293/-/Official_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1762216911680,
+    "cdate": 1762216911680,
+    "tmdate": 1762943031829,
+    "mdate": 1762943031829,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission24293 by Reviewer Ax1G",
+    "display_title": "Official Comment by Authors",
+    "content": {
+      "comment": {
+        "value": "Thank you for the thoughtful and detailed review.\n\n**W1.** In our revised manuscript, we now include **random-baseline results and standard errors** for all reported tasks in Tables 5, 6 and 7 in Appendix C. The updated tables are as follows:\n\n| Model | COPA (50) | MultiRC (50) | WiC (50) | QNLI (50) | WNLI (50) | Avg (50) |\n| --- | --- | --- | --- | --- | --- | --- |\n| LLaMA | **75.80 ± 1.92** | 43.24 ± 0.32 | 50.00 ± 0.89 | 49.49 ± 0.30 | 51.27 ± 2.66 | 53.96 |\n| DenseFormer | 74.00 ± 1.96 | 45.92 ± 0.32 | 49.69 ± 0.89 | 50.08 ± 0.30 | 52.11 ± 2.66 | 54.36 |\n| HC | 74.00 ± 1.96 | 54.34 ± 0.32 | 49.72 ± 0.89 | 49.43 ± 0.30 | **56.34 ± 2.64** | 56.77 |\n| **LIMe** | 75.20 ± 1.93 | **56.15 ± 0.32** | **50.44 ± 0.89** | **51.43 ± 0.30** | 56.06 ± 2.64 | **57.86** |\n\n| Model | ARC-E (25) | ARC-C (25) | HellaSwag (25) | OBQA (25) | Avg (25) |\n| --- | --- | --- | --- | --- | --- |\n| LLaMA | 70.45 ± 0.42 | 38.70 ± 0.64 | 52.55 ± 0.22 | 37.68 ± 0.97 | 49.85 |\n| DenseFormer | 70.60 ± 0.42 | 36.48 ± 0.63 | 41.46 ± 0.22 | 26.84 ± 0.89 | 43.85 |\n| HC | 71.15 ± 0.42 | 37.63 ± 0.63 | **54.04 ± 0.22** | **40.08 ± 0.98** | 50.73 |\n| **LIMe** | **71.15 ± 0.42** | **39.30 ± 0.64** | 52.85 ± 0.22 | 39.68 ± 0.98 | **50.75** |\n\n| Model | KV (50) | Induction (50) | IR (0.04) | CO (0.06) | Avg (25.03) |\n| --- | --- | --- | --- | --- | --- |\n| LLaMA | 45.94 ± 2.22 | 54.20 ± 2.69 | 12.94 ± 1.63 | 16.97 ± 0.38 | 32.51 |\n| DenseFormer | 50.30 ± 2.23 | 51.30 ± 2.69 | **15.76 ± 1.77** | **18.59 ± 0.39** | 33.99 |\n| HC | 51.68 ± 2.23 | 51.59 ± 2.69 | 15.29 ± 1.75 | 18.48 ± 0.39 | 34.26 |\n| **LIMe** | **55.64 ± 2.21** | **55.36 ± 2.68** | 14.82 ± 1.73 | 17.39 ± 0.38 | **35.80** |\n\n**W2.** Regarding the confusion around the term “LLaMA” in Table 1: Yes, we clarify in Section 5.1 that all models (including our baseline “LLaMA”) share the same base architecture (matching that of the publicly-known LLaMA models), but we **trained them from scratch** ourselves. We will revise the text to make this distinction clearer — the term “LLaMA” in the table refers to our reproduction of that architecture, not the off-the-shelf pre-trained model."
+      }
+    },
+    "id": "73YQJJJY4E",
+    "forum": "1CoJWNcpmm",
+    "replyto": "2BlHNIBl7g",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission24293/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission24293/Authors"
+    ],
+    "number": 1,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission24293/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1763753959561,
+    "cdate": 1763753959561,
+    "tmdate": 1763753959561,
+    "mdate": 1763753959561,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission24293 by Reviewer Ax1G",
+    "display_title": "Official Comment by Authors",
+    "content": {
+      "comment": {
+        "value": "**Q1.** Yes — in the value/hidden-state classification experiments, the underlying language model’s parameters are frozen. We collect the relevant representations and train only a simple logistic regression probe on top; the probe’s weights are the only trainable parameters.\n\n**Q2.** Yes — we performed an exploratory analysis of alternative parameterizations of the router architecture (now detailed in the Appendix F). Specifically, we tried:\n\n- **No head mixing**: each head in layer $\\ell$ only mixes KV from **the** **same** **head index** across previous layers (router shape [H, L] instead of [H, L * H]).\n- **Per-dimension mixing**: each previous head is weighted by a `head_dim`-dimensional vector instead of a scalar (router shape [H, L * H * head_dim]).\n\n| Setup | Loss | Perplexity |\n| --- | --- | --- |\n| LLaMa | 2.80043 | 16.45 |\n| LIMe default | 2.76889 | 15.94 (-3.1%) |\n| LIMe no head mix | 2.83235 | 16.99 (+3.3%) |\n| LIMe per-dim mix | 2.77911 | 16.10 (-2.1%) |\n\nFrom this we draw two key takeaways:\n\n1. **Cross-head mixing matters.** The “no head mix” variant eliminated the gains and in fact performed worse than baseline (+3.3% perplexity), implying that mixing across heads (not simply across layers within the same head) is important.\n2. **Per-dimension routing is not necessary in our regime.** The per-dimension variant did improve over LLaMA (-2.1 %) but did *not* match the simpler scalar per-head router (-3.1 %) and introduced significantly more parameters (≈ head_dim × more) and cost. Hence, we opted for the scalar per-head router in the main method.\n\n**Q3.** The differences between our method LIMe and the compared method DenseFormer are twofold: memory usage and expressiveness.\n\n- In DenseFormer, the method must **store all previous layer outputs** in memory during inference.\n- In contrast, LIMe uses the existing Key-Value buffers and introduces a learned router that mixes attention heads from previous layers; thus, we enable richer cross-layer, cross-head mixing while **avoiding additional memory overhead**.\n- We also show that disabling head-mixing in LIMe leads to poorer performance, supporting the view that enhanced mixing is key:\n    \n    \n    | Setup | Loss | Perplexity |\n    | --- | --- | --- |\n    | LLaMa | 2.80043 | 16.45 |\n    | LIMe default | 2.76889 | 15.94 (-3.1%) |\n    | LIMe no head mix | 2.83235 | 16.99 (+3.3%) |\n- Moreover, the DenseFormer paper reports only perplexity for their trained models, whereas we report both perplexity and **real-benchmark downstream tasks**.\n- We used the official DenseFormer implementation, and the training results we obtained were: LLaMA 11.56, LIMe 11.47, DenseFormer 11.36 (perplexity). However, while DenseFormer shows lower perplexity in this controlled setting, it **did not** translate into improved performance on the downstream LM evaluation harness benchmarks we report (see Table 1). For transparency and reproducibility, the revised version now reports perplexity values for all baselines.\n\nWe believe we have addressed all concerns comprehensively, and we kindly ask you to consider raising the score."
+      }
+    },
+    "id": "SmZR1ugQsy",
+    "forum": "1CoJWNcpmm",
+    "replyto": "2BlHNIBl7g",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission24293/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission24293/Authors"
+    ],
+    "number": 2,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission24293/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1763754057465,
+    "cdate": 1763754057465,
+    "tmdate": 1763754057465,
+    "mdate": 1763754057465,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to You Do Not Fully Utilize Transformer's Representation Capacity",
+    "display_title": "Official Comment by Authors",
+    "content": {
+      "comment": {
+        "value": "Dear Reviewers,\n\nThank you again for the time you have dedicated to evaluating our submission. We have uploaded a revised version of the paper that incorporates all clarifications and additional experiments discussed in our rebuttal. As the rebuttal period is nearing its end, we would kindly ask you to take another look at our responses and the updated paper, and to reconsider your scores if our clarifications adequately address your concerns.\n\nWe greatly appreciate your effort during this busy stage of the ICLR review process."
+      }
+    },
+    "id": "M8LSmtenE8",
+    "forum": "1CoJWNcpmm",
+    "replyto": "1CoJWNcpmm",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission24293/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission24293/Authors"
+    ],
+    "number": 8,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission24293/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764177968823,
+    "cdate": 1764177968823,
+    "tmdate": 1764178457759,
+    "mdate": 1764178457759,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to You Do Not Fully Utilize Transformer's Representation Capacity",
+    "display_title": "Official Comment by Authors",
+    "content": {
+      "comment": {
+        "value": "# General Response for the Area Chair\n\nWe thank the reviewers for their careful and constructive feedback. Reviewers broadly agree that LIMe is a simple, practical modification that reuses the KV cache with low overhead, improves perplexity and downstream reasoning performance, and is supported by a clear representation‑collapse analysis. The main concerns were about (1) relation to prior and concurrent work (vzV7, nGJ6), including DenseFormer’s behavior, (2) baselines and experimental clarity (Ax1G, nGJ6), and (3) efficiency and scalability (vzV7, 8E6q). Below, we summarize how the revised paper and discussion address each of these.\n\n1. **Relation to prior / concurrent work and DenseFormer**\n\nWe now clarify more explicitly how LIMe fits into and differs from prior work that reuses earlier representations. The revised paper cites Value Residual Learning and LAUREL alongside DenseFormer and HyperConnections, and it marks MUDDFormer and DeepCrossAttention as concurrent work targeting residual bottlenecks or strengthened residual paths. In our responses, we explain that LIMe is distinct in that it\n\n- operates directly at the KV level,\n- reuses the existing KV cache with no extra activation memory at our main scale, and\n- uses a per‑head router that mixes across both layers and heads.\n\nNew ablations (no head mixing, per‑dimension routing, etc.) show that this KV‑level, per‑head cross‑layer/head routing is necessary for the observed gains: removing cross‑head mixing or replacing the scalar router with a heavier per‑dimension variant consistently harms performance.\n\nTo address the concern that DenseFormer underperforms our baseline, we provide perplexity numbers for all the compared methods in discussion with the reviewer. DenseFormer and HyperConnections do achieve lower perplexity than our LLaMA baseline (consistent with their original claims), but this does not translate into better downstream accuracy, whereas LIMe improves over both. This clarifies that DenseFormer is not “broken” in our implementation; instead, LIMe offers a different trade‑off that better aligns perplexity and downstream performance.\n\n2. **Baselines and experimental clarity**\n\nWe added random baselines and standard errors for all LM‑Harness benchmarks and clarify that all models (including “LLaMA”) are trained from scratch with the same architecture. For baselines, we now explicitly state that we use DenseFormer (dilation = 1, period = 1) and HyperConnections Dynamic (expansion rate 4), following strong variants from the original papers. DenseFormer is implemented using the official author code from the public GitHub repository, and the HyperConnections Dynamic implementation is taken directly from the code listing in the original paper. For probing experiments, we clarify that the language model is frozen and only a logistic‑regression probe is trained on top of the collected representations.\n\n3. **Efficiency and scalability**\n\nFor our main 16‑layer, 1B models without pipeline parallelism, LIMe with GQA incurs about +1.16% latency and ≈0% extra activation memory; the “negligible overhead” claim is now explicitly scoped to this regime. To study depth scaling, we report 128‑layer results and show that structured routers (e.g., first‑j, dilated) reduce routing complexity to effectively $O(L)$ while retaining almost all perplexity gains and, in some cases, outperforming full $O(L^2)$ routing.\n\nFor pipeline parallelism, we explicitly report a +7.8% step‑time overhead for an 8B model with a simple 1F1B schedule and present this as a moderate but real limitation. We also explain how LIMe’s reuse of existing KV buffers and structured routing can localize communication and reduce this cost, and emphasize that many 1B–32B deployments rely on data‑ or FSDP‑style parallelism where the overhead remains ≈1–2%.\n\nTaken together, these revisions directly address the reviewers’ concerns about novelty, baselines, and efficiency. We believe the revised paper now provides a clear, well‑supported contribution on alleviating representation collapse via KV‑level routing in decoder‑only transformers, and we respectfully submit that it merits acceptance."
+      }
+    },
+    "id": "DSz4gZIWxh",
+    "forum": "1CoJWNcpmm",
+    "replyto": "1CoJWNcpmm",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission24293/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission24293/Authors"
+    ],
+    "number": 10,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission24293/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764610940279,
+    "cdate": 1764610940279,
+    "tmdate": 1764610940279,
+    "mdate": 1764610940279,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to You Do Not Fully Utilize Transformer's Representation Capacity",
+    "display_title": "Meta Review of Submission24293 by Area Chair vDys",
+    "content": {
+      "summary": {
+        "value": "Most reviewers appreciate the elegance of the proposed idea and the improved efficiency compared to previous works by reusing the KV cache to avoid the memory overhead. Multiple reviewers also praise the comprehensive evaluation in downstream tasks. The analysis of representation collapse is also helpful.\n\nReviewers share the following concerns:\n1. Limited novelty. The idea of using hidden states of previous layers has been studied in multiple prior works. The contribution of this work is in the implementation of this idea but the authors failed to clarify the difference from prior works.\n2. Benchmark performance. One reviewer is concerned of the advantage of LIMe over existing works in the benchmarks in lack of random baselines and standard errors\n3. Efficiency and scaling. Multiple reviewers are concerned of the runtime overhead and practicality of the method in large-scale training especially with pipeline parallelism\n4. Clarification questions about the implementation of baselines"
+      },
+      "reviewer_concerns": {
+        "value": "Addressed: concern 4. The rebuttal explains the discrepancy of DenseFormer's performance in this submission and in the original paper due to the use of different (training vs downstream) metrics.\n\nPartially addressed: concern 1 and 3.\nConcern 1. The rebuttal expands the discussion of the implementation difference between LIMe and existing works. It clarifies the benefits in reducing memory by reusing the KV cache, but the general concern of the similarity of the high level idea to existing works remain.\nConcern 3. The rebuttal explains that the runtime overhead is negligible when using first-j routers with more details. However, it also acknowledges the \"moderate but real limitation\" of the runtime cost with pipeline parallelism which corroborates the concern for large-scale training.\n\nFailed to addressed: concern 2. The rebuttal provides standard errors of the experimental results. LIMe is better than the baseilne, HC, with statistical significance in 5 out of 14 tasks, and worse in 2 tasks. The new results confirms the reviewer's concern on its empirical strength."
+      },
+      "reviewer_scores": {
+        "value": "Ax1G: initial rating 4. The main concern is about the empirical performance. The rebuttal will not improve the reviewer assessment, if not lowering that.\n\nvzV7, nGJ6: initial rating 4. The main concerns from both reviewers are the limited novelty and the computational cost analysis. As explained are the previous section, both concerns are only partially addressed. The rebuttal will not change their score.\n\n8E6q: initial rating 6. The reviewer's main concern is the L^2 complexity and practical implementation challenge for large-scale training. The rebuttal explains the benefit of \"first-j routers\" with a linear complexity but at the same time acknowledges the practical challenge with pipeline parallelism. The rebuttal will not change the score."
+      }
+    },
+    "id": "qcRLXwY72p",
+    "forum": "1CoJWNcpmm",
+    "replyto": "1CoJWNcpmm",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission24293/Area_Chair_vDys"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission24293/Senior_Area_Chairs",
+      "ICLR.cc/2026/Conference/Submission24293/Area_Chair_vDys"
+    ],
+    "number": 1,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission24293/-/Meta_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1767617708132,
+    "cdate": 1767617708132,
+    "tmdate": 1770619826002,
+    "mdate": 1770619826002,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Meta_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to You Do Not Fully Utilize Transformer's Representation Capacity",
+    "display_title": "Paper Decision",
+    "content": {
+      "title": {
+        "value": "Paper Decision"
+      },
+      "decision": {
+        "value": "Reject"
+      },
+      "comment": {
+        "value": ""
+      }
+    },
+    "id": "bInENGFhLr",
+    "forum": "1CoJWNcpmm",
+    "replyto": "1CoJWNcpmm",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Program_Chairs"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Program_Chairs"
+    ],
+    "number": 1,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission24293/-/Decision",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1769417598522,
+    "cdate": 1769417598522,
+    "tmdate": 1770354359213,
+    "mdate": 1770354359213,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Decision",
+    "license": "CC BY 4.0",
+    "version": 2
+  }
+]
