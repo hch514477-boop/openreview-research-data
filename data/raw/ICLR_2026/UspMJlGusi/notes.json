@@ -1,0 +1,1258 @@
+[
+  {
+    "replying_to": "Replying to Scaling Attention via Feature Sparsity",
+    "display_title": "Official Review of Submission2712 by Reviewer 5rhv",
+    "content": {
+      "summary": {
+        "value": "The paper introduces Sparse Feature Attention (SFA), which enforces k-sparse query/key vectors and computes attention only on overlapping active feature coordinates, reducing the arithmetic of QKᵀ from Θ(n²d) to Θ(n²k²/d). To make this practical, the authors propose FlashSFA, an IO-aware kernel that integrates sparse overlaps into the FlashAttention tiling/online-softmax pipeline without materializing n×n score matrices. Experiments on GPT-2 and Qwen3 pretraining, synthetic long-context retrieval (NIAH), and several downstream tasks claim to match dense-attention quality while yielding up to ~2.5× speedups, ~49% FLOPs, and ~41% KV-cache savings, particularly at long contexts."
+      },
+      "soundness": {
+        "value": 1
+      },
+      "presentation": {
+        "value": 3
+      },
+      "contribution": {
+        "value": 3
+      },
+      "strengths": {
+        "value": "- Clear, orthogonal idea: Moves the sparsity lever from tokens to feature coordinates, preserving token coverage while lowering per-interaction cost (Θ(n²k²/d)). The complexity argument is clean and intuitive.\n- Kernel contribution: FlashSFA marries sparse overlaps with FlashAttention’s online softmax/tiling, avoiding n² materialization and targeting the actual memory bottleneck.\n- Evidence of efficiency/quality trade-off: At fixed models, SFA often matches dense perplexity/accuracy and beats “short embeddings” that shrink d, with up to ~2.5× speed, ~49% FLOPs, and ~41% KV-cache reductions reported.\n- Long-context relevance: On synthetic NIAH and long-sequence latency/KV scaling, SFA’s advantages grow with context length/head dimension, aligning with the paper’s motivation.\n- Compatibility: Conceptually composes with token sparsity/paging; could multiply gains in real systems."
+      },
+      "weaknesses": {
+        "value": "- Missing or thin comparisons to modern long-context/efficient baselines beyond “short embeddings”: e.g., token-sparse (Longformer/BigBird/Routing), KV-pruning/paging (H2O, Quest, SnapKV), low-rank keys (LoKI), and kernel methods (Performer/Nyström). SFA should be combined and compared head-to-head under the same training/inference regimes.\n- The k-sparsification uses row-wise Top-k with a straight-through estimator; stability/variance, gradient bias, and sensitivity to k (and to head dim d) are not adequately analyzed.\n- “Short-embedding” baselines may be overly weak (simple linear downsizing). Stronger compression baselines (e.g., low-rank Q/K, grouped-query attention variants, learned projections) should be included.\n- Reported GSM-8K lags for SFA vs dense after finetuning suggest arithmetic reasoning sensitivity to feature pruning; this deserves deeper diagnosis and mitigation (e.g., adaptive k, soft-top-k)."
+      },
+      "questions": {
+        "value": "- Can you add head-to-head comparisons with H2O, Quest, SnapKV, LoKI, Routing/BigBird/Longformer, Performer/Nyström at the same training/inference configs (same context windows, same datasets), and report both quality and speed/KV?\n- GSM-8K drops relative to dense FT—can adaptive k or hybrid (dense for a subset of heads/layers) recover this?"
+      },
+      "flag_for_ethics_review": {
+        "value": [
+          "No ethics review needed."
+        ]
+      },
+      "rating": {
+        "value": 4
+      },
+      "confidence": {
+        "value": 2
+      },
+      "code_of_conduct": {
+        "value": "Yes"
+      }
+    },
+    "id": "9Yvpuyju4b",
+    "forum": "UspMJlGusi",
+    "replyto": "UspMJlGusi",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission2712/Reviewer_5rhv"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission2712/Reviewer_5rhv"
+    ],
+    "number": 1,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission2712/-/Official_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1761449742045,
+    "cdate": 1761449742045,
+    "tmdate": 1762916339793,
+    "mdate": 1762916339793,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission2712 by Reviewer 5rhv",
+    "display_title": "Official Comment by Authors",
+    "content": {
+      "comment": {
+        "value": "Thank you very much for your careful reading and insightful questions. We truly appreciate the time and effort you devoted to evaluating our work. We address your concerns point-by-point as follows.\n\n---\n\n**Q1:** Missing or thin comparisons to modern long-context/efficient baselines beyond “short embeddings”: e.g., token-sparse (Longformer/BigBird/Routing), KV-pruning/paging (H2O, Quest, SnapKV), low-rank keys (LoKI), and kernel methods (Performer/Nyström). SFA should be combined and compared head-to-head under the same training/inference regimes.\n\n**A1:** Following your suggestions, we have conducted **extensive new experiments** on GPT-2 124M comparing SFA directly against Token-Sparse (Longformer, Routing), KV-Pruning (H2O, Quest, SnapKV), Low-Rank (LoKI), and Kernel (Performer) methods, as detailed below:\n\n*Table 1:* Benchmark results across various baselines on GPT-2 124M.\n\n| Method | Latency Decode | Latency Forward | PPL (OWT/Pile) | Acc PiQA | Acc LAMBDA | Acc ARC-e | Acc ARC-c | Acc HellaS | Acc Avg |\n| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |\n| **Dense (full)** | 17.08 | 16.86 | 17.29 | 42.74 | 22.78 | 28.35 | 8.12 | 19.61 | 24.32 |\n| SFA | 14.12 | 9.41 | 18.17 | 41.62 | 21.03 | 28.41 | 7.39 | 19.26 | 23.54 |\n| **_Token Sparse_** | | | | | | | | | |\n| Routing | 7.92 | 8.37 | 18.64 | 41.39 | 21.08 | 28.31 | 7.11 | 18.89 | 23.35 |\n| Longformer | 6.75 | 7.93 | 18.73 | 41.28 | 21.27 | 28.02 | 7.01 | 18.92 | 23.30 |\n| Longformer+SFA ($k=8$) | **5.23** | **6.18** | 19.30 | 40.75 | 20.54 | 26.39 | 6.63 | 17.24 | 22.31 |\n| **_KV-pruning_** | | | | | | | | | |\n| H$_2$O | 13.32 | 16.86 | 18.02 | 41.81 | 20.55 | 27.04 | 7.38 | 18.75 | 23.11 |\n| Quest | 10.84 | 16.86 | 17.95 | 42.34 | 20.79 | 28.30 | 7.82 | 18.83 | 23.62 |\n| SnapKV | 9.88 | 16.86 | 17.91 | 42.49 | 21.92 | 28.43 | 8.01 | 19.38 | 24.05 |\n| SnapKV+SFA ($k=8$) | **6.92** | **9.41** | 19.44 | 39.99 | 20.24 | 27.13 | 6.83 | 17.74 | 22.39 |\n| **_Low-rank keys_** | | | | | | | | | |\n| Loki | 11.39 | 16.86 | 17.82 | 42.10 | 21.29 | 28.01 | 7.99 | 19.24 | 23.73 |\n| Loki+SFA ($k=8$) | **9.09** | **9.41**| 19.29 | 40.83 | 20.04 | 27.85 | 7.13 | 18.03 | 22.78 |\n| **_Kernel Method_** | | | | | | | | | |\n| Performer | 9.43 | 7.93 | 19.72 | 39.83 | 19.11 | 26.72 | 6.77 | 15.38 | 21.56 |\n\n\nAs shown in **Talbe 1**, **SFA is competitive with these methods on quality, and that it is orthogonal and composable with them**. When we plug SFA into Token-Sparse or KV-Pruning systems (e.g., SnapKV + SFA), we obtain additional speedups (decoding latency reduces from 9.88ms to **6.92ms**) with manageable performance trade-offs.\n\nA critical distinction is observed in the **Forward Latency** column. KV-pruning methods (H2O, Quest, SnapKV) and Low-Rank methods (LoKI) rely on full attention during the prompt phase, offering *no acceleration* in prefilling (remaining at $\\approx 16.86$ ms). In contrast, SFA reduces forward latency to **9.41 ms**. **By combining SFA with these methods, we unlock acceleration for both prefilling and decoding stages.**\n\nWe have included these detailed comparisons in **Appendix E and G** of the revised manuscript. We will merge these experimental results into the final version.\n\n---\n\n**Q2:** The k-sparsification uses row-wise Top-k with a straight-through estimator; stability/variance, gradient bias, and sensitivity to k (and to head dim d) are not adequately analyzed.\n\n> The k-sparsification uses row-wise Top-k with a straight-through estimator; stability/variance, gradient bias\n\n**A2.1:** Our empirical results demonstrate that **STE does not hinder training stability or convergence in practice.**\n\nAs shown in **Figure 7**, the loss curves decrease smoothly and monotonically without divergent spikes or chaotic oscillations across all values of $k$ ($2, 4, 8, 16$). Even under aggressive sparsity ($k=2$, Red line), the model converges steadily, suggesting that the STE does not lead to high variance or instability during optimization. We've included this discussion in **Appendix I**.\n\n>sensitivity to k (and to head dim d) \n\n**A2.2:** We further analyzed the sensitivity of SFA to different k and head dim d:\n- Sensitivity to sparsity $k$: As shown in **Figure 8**, perplexity monotonically improves as $k$ increases. **$k=8$ emerges as the optimal sweet spot, achieving performance nearly identical to the dense baseline while maintaining a substantial latency advantage.** The method is robust to $k$ selection within moderate ranges.\n- Sensitivity to head dimension $d_{\\text{head}}$: As illustrated in **Figure 9**, performance improves rapidly as dimension increases from 32 to 64. **At $d_{\\text{head}} = 64$, SFA recovers most of the dense-model performance while preserving acceleration.**\n\nWe've added this ablation study in **Appendix H**."
+      }
+    },
+    "id": "cRDN96zkxc",
+    "forum": "UspMJlGusi",
+    "replyto": "9Yvpuyju4b",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission2712/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission2712/Authors"
+    ],
+    "number": 6,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission2712/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764039693931,
+    "cdate": 1764039693931,
+    "tmdate": 1764039693931,
+    "mdate": 1764039693931,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Comment by Authors",
+    "display_title": "Official Comment by Authors",
+    "content": {
+      "comment": {
+        "value": "**Q3:** “Short-embedding” baselines may be overly weak (simple linear downsizing). Stronger compression baselines (e.g., low-rank Q/K, grouped-query attention variants, learned projections) should be included.\n\n**A3:** Following your suggestion, we implemented Learned Projections (down-projecting features to $d=32/64$) and Low-Rank Key/Value Compression and compared them alongside MLA (DeepSeek's Multi-Head Latent Attention). Results are shown below:\n\n*Table2.* Benchmark Results to compression baselines under GPT-124M and Qwen3-0.6B\n\n| Model | Variant | Latency Decode $\\downarrow$ (ms) | Latency Forward $\\downarrow$ (s) | PPL $\\downarrow$ (OWT/Pile) | Acc PiQA $\\uparrow$ | Acc LAMBDA $\\uparrow$ | Acc ARC-e $\\uparrow$ | Acc ARC-c $\\uparrow$ | Acc HellaS $\\uparrow$ | Acc Avg $\\uparrow$ |\n| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |\n| **GPT2 124M** | Dense (full) | 17.08 | 16.86 | 17.29 | 42.74 | 22.78 | 28.35 | 8.12 | 19.61 | 24.32 |\n| | Learned projections ($d=32$) | 8.37 | 7.86 | 20.70 | 39.27 | 19.39 | 25.72 | 6.52 | 14.26 | 21.03 |\n| | Low-Rank | 8.93 | 7.99 | 19.89 | 39.81 | 20.04 | 26.47 | 6.89 | 14.99 | 21.64 |\n| | MLA | 5.04 | 15.39 | 17.38 | 42.83 | 22.29 | 28.37 | 7.94 | 19.66 | 24.22 |\n| | MLA + SFA | **3.98** | **15.05** | 19.07 | 41.13 | 21.92 | 27.88 | 7.06 | 19.01 | 23.40 |\n| | SFA ($k=8$) | 14.12 | 9.41 | 18.17 | 41.62 | 21.03 | 28.41 | 7.39 | 19.26 | 23.54 |\n| **Qwen3 0.6B** | Dense (full) | 80.84 | 77.65 | 4.66 | 62.47 | 34.82 | 45.41 | 20.35 | 33.95 | 39.40 |\n| | Learned projections ($d=64$) | 38.68 | 30.84 | 6.03 | 58.43 | 31.27 | 41.58 | 15.83 | 28.29 | 35.08 |\n| | Low-Rank | 40.58 | 32.46 | 5.50 | 59.19 | 31.49 | 41.77 | 15.8 | 30.65 | 35.78 |\n| | MLA | 8.74 | 68.92 | 4.69 | 62.39 | 34.71 | 45.41 | 20.17 | 34.21 | 39.38 |\n| | MLA + SFA | **6.72** | 65.29 | 4.9 | 61.22 | 33.94 | 43.36 | 19.25 | 33.94 | 38.34 |\n| | SFA ($k=16$) | 66.29 | 34.20 | 4.81 | 61.73 | 34.05 | 45.62 | 19.27 | 34.03 | 38.94 |\n\n- **SFA vs. Learned/Low-Rank Projections**: While \"Learned Projections\" and \"Low-Rank\" methods achieve aggressive latency reduction, they *suffer from severe performance degradation*. In contrast, **SFA ($k=16$) maintains high accuracy (38.94, only -0.46 drop) while still providing significant prefill acceleration (77.65ms $\\to$ 34.20ms).** This demonstrates that SFA's sparse selection preserves semantic information much better than aggressive low-rank compression.\n\n- **SFA vs. MLA (Strong Baseline)**: As noted in **Table 2**, MLA does not significantly accelerate the prefill (forward) stage (e.g., Qwen3 Forward: 68.92ms vs. Dense 77.65ms). **By combining SFA with MLA (MLA + SFA), we achieve the fastest decoding latency in the table (6.72ms on Qwen3) and further reduce prefill latency, with acceptable accuracy trade-offs.**\n\n\nAs shown in **Table 1**, combining SFA with MLA **yields consistent efficiency gains across models**:\n- GPT2-124M: The combination reduced decoding latency from**5.04 ms to 3.98 ms** ($\\approx$ 21% speedup) and prefill (forward) latency from **15.39 ms to 15.05 ms**, with only a negligible drop in average accuracy (24.22 to 23.40). \n- Qwen3. Similarly, the combination reduced decoding latency from **8.74 ms to 6.72 ms** ($\\approx$ 23% speedup) and prefill latency from **68.92 ms to 65.29 ms**, while maintaining competitive performance (Avg Acc 38.34 vs. 39.38).\n\nWe have included these comparisons in **Appendix G**, confirming that SFA offers a superior speed-quality trade-off compared to naive low-rank methods and acts as a powerful enhancer for advanced architectures like MLA. We will merge these experimental results into the final version."
+      }
+    },
+    "id": "id0H3co6bY",
+    "forum": "UspMJlGusi",
+    "replyto": "cRDN96zkxc",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission2712/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission2712/Authors"
+    ],
+    "number": 7,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission2712/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764039794918,
+    "cdate": 1764039794918,
+    "tmdate": 1764039794918,
+    "mdate": 1764039794918,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Comment by Authors",
+    "display_title": "Official Comment by Authors",
+    "content": {
+      "comment": {
+        "value": "**Q4: Reported GSM-8K lags for SFA vs dense after finetuning suggest arithmetic reasoning sensitivity to feature pruning; this deserves deeper diagnosis and mitigation (e.g., adaptive k, soft-top-k).**\n\n**A4:** We investigated this issue and found that **GSM-8K accuracy tracks general language-modeling strength.** \n\n- **Closing the Gap with Improved Tuning:** Once we aligned the fine-tuning recipe to better restore general language capabilities, the arithmetic reasoning performance improved correspondingly. As shown in **Table 3** below, **SFA largely closes the performance gap to the dense baseline while maintaining its efficiency advantage.**\n\n\n*Table 3* Updated GSM-8K and Long-Context (NIAH) Results. \n| Model | Variant | GSM-8K | NIAH 4096 | NIAH 8192 | NIAH 16384 | NIAH 32768 |\n| :--- | :--- | :---: | :---: | :---: | :---: | :---: |\n| **Qwen3-0.6B** | Base | 59.59  | 90 | 87 | 77 | 52 |\n| | Fine-tune | 63.42 | 94 | 92 | 79 | 55 |\n| | SFA ($k=16$) | 61.46 |  **95** | **93** | 77 | 53 |\n| **Qwen3-4B** | Base | 75.44 | 97 | 95 | 90 | 81 |\n| | Fine-tune | 76.18 | 99 | 96 | 92 | 84 |\n| | SFA ($k=16$) | 75.56  | **99** | 93 | 91 | **84** |\n| **Qwen3-8B** | Base | 87.62  | 100 | 100 | 97 | 92 |\n| | Fine-tune | 89.11 |  100 | 100 | 99 | 95 |\n| | SFA ($k=16$) | 87.99 |  **100** | **100** | **100** | **97** |\n\nFor Qwen3-4B and 8B, the gap between SFA ($k=16$) and Dense Fine-tuning is negligible ($\\approx 0.6 - 1.1\\%$), and SFA consistently outperforms the Base model.\n\nSFA matches or slightly improves performance on NIAH across all context lengths (e.g., maintaining 100% accuracy on Qwen3-8B up to 16k). This confirms that **feature sparsification does not introduce an information bottleneck that hampers complex reasoning or retrieval.** We've updated corresponding results in **Table 3** of the revised manuscript.\n\n\n>mitigation (e.g., adaptive k, soft-top-k)\n>\n- **Future Work** (Adaptive $k$): Exploring more sophisticated variants such as adaptive $k$ or hybrid schemes that keep a subset of heads/layers dense is an interesting direction to further close the remaining small gap to dense FT, but we leave these extensions to future work in order to keep the current method simple and easy to deploy.\n\n---\n\n**Q5:** Can you add head-to-head comparisons with H2O, Quest, SnapKV, LoKI, Routing/BigBird/Longformer, Performer/Nyström at the same training/inference configs (same context windows, same datasets), and report both quality and speed/KV?\n\n**A5:** Please see **A3**.\n\n---\n\nThank you once again for your careful reading and constructive suggestions. We have thoroughly refined the manuscript in accordance with your feedback and have addressed each of your concerns above. We respectfully hope that the updated analyses and results will allow you to re-evaluate our work. Should any questions remain, we would be more than happy to provide further clarification."
+      }
+    },
+    "id": "Q4aGrhQB1y",
+    "forum": "UspMJlGusi",
+    "replyto": "id0H3co6bY",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission2712/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission2712/Authors"
+    ],
+    "number": 8,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission2712/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764040118182,
+    "cdate": 1764040118182,
+    "tmdate": 1764040118182,
+    "mdate": 1764040118182,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Comment by Authors",
+    "display_title": "Official Comment by Reviewer 5rhv",
+    "content": {
+      "comment": {
+        "value": "Thank you for the detailed updates and extensive new experiments. I appreciate all the empirical analysis shown. One remaining concern is that the manuscript still lacks a clear conceptual explanation of **why** top-k feature sparsification preserves semantic information and **why** a fixed choice such as (k=16) works robustly across models and tasks. The rebuttal provides empirical curves showing stability and sensitivity to (k), but these do not fully address the underlying mechanism. For example, are attention head activations intrinsically low-dimensional? is the magnitude distribution heavy-tailed? Do top-k features align with principal semantic directions?"
+      }
+    },
+    "id": "50IyC4m3CD",
+    "forum": "UspMJlGusi",
+    "replyto": "Q4aGrhQB1y",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission2712/Reviewer_5rhv"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission2712/Reviewer_5rhv"
+    ],
+    "number": 18,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission2712/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764043336440,
+    "cdate": 1764043336440,
+    "tmdate": 1764043336440,
+    "mdate": 1764043336440,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Comment by Reviewer 5rhv",
+    "display_title": "Official Comment by Authors",
+    "content": {
+      "comment": {
+        "value": "Thanks for your update and we are glad that hear that we addressed your previous concerns on empirical analysis. We are happy to further address your remaining concerns.\n\n\n---\n\n**Q1**. Why top-k feature sparsification preserves semantic information?\n\n**A1**. That is a very valid question and we should have provided more background on this. Using sparse features for compressing high-dimensional inputs has been a long-standing important research topic in signal processing and machine learning, related to a number of fields including dictionary learning [1], compressed sensing [2], etc. In recent literature like CSR and SAE, sparse vectors also achieve high compression rate for dense neural embeddings. This is all based on the common finding that high-dimensional signal can often be well approximated by a few sparsely activated salient features (and there are a number of scenarios that it outperforms low-rank methods like SVD). This motivates us to explore the use of sparse features for attention computing. \n\n**QK has Low intrinsic dimensionality.** A core reason why features are compressible is that high-dimensional features, in practice, often lie in a low-dimensional manifold. To see this, we further conduct an SVD analysis (see Figure 11 in Appendix L of revision) of the QK vectors, which we find that for a head dimension of $d=128$, the effective rank is only around **50-60**. This indicates that the semantic information is highly compressible.\n\n**How sparse activation (eg TopK or ReLU) preserves semantic information.** In NNs, there are two main ways to obtain sparse features, threshold-based activation (e.g., ReLU), and topk-based activation (e.g., TopK). Both approaches select the most salient activations, just based on different criteria. After end-to-end training, NNs will adapt to these sparse activations and learn to activate most important semantic features for LM prediction.\n\n**TopK vs ReLU.** A recent work, TopKSAE[3] from OpenAI shows that TopK activation outperforms ReLU by significant margins (better sparsity at similar semantic preservation, and better semantics under the same sparsity). Also, since TopK maintains a constant level of sparsity, it is also more hardware friendly for efficiency. Therefore, we choose adopt TopK as the sparse activation. But the method (attention computing with sparse features) is generic and extendable to other sparse activation as well.\n\nHope this elaboration address your concerns and please let us know if there is more to clarify!\n\n---\n\n**Q2:** Why a fixed choice such as (k=16) works robustly across models and tasks.\n\n**A2:** When choosing a sparse activation function (either ReLU or TopK), one hopes it to be rather generic and robust to new data, and does not need domain-specific hyperparameter finetuning. \n\nFor example, for ReLU with $f(x)=\\max(x,0)$, people do not adjust the threshold $0$ for different domains, but instead let NNs adapt to it via end-to-end training on different data. \n\nFor the same reason, we adopt the same $k$ for controlling the overall sparsity of models and let NNs to adapt to it on different data and domains. The TopkSAE papers shows that TopK activation is also robust to different data and domains and does not need domain-specific tuning. In our experiments, we do observe that $k=16$ places the model on a superior Pareto frontier compared to other compression techniques.\n\nThus, we believe that either ReLU or TopK, one has to set a prefined threshold (e.g. 0 for ReLU) or K (16 for ours) as the overall sparsity levels. And NNs through end-to-end training is able to adapt to such criteria and find the most salient features to be activated for the final prediction. While domain-specific hyperparameter tuning can very likely yield some additional gains, it would add too much additional costs. We find that even without it, SFA can already attain superior feature compression on a broad range of data and tasks.\n\nRef:\n\n[1] Aharon, Michal, Michael Elad, and Alfred Bruckstein. \"K-SVD: An algorithm for designing overcomplete dictionaries for sparse representation.\" IEEE Transactions on signal processing 54.11 (2006): 4311-4322.\n\n[2] J. Mairal, F. Bach, and J. Ponce, “Sparse Modeling for Image and Vision Processing,” Foundations and Trends in Computer Graphics and Vision, vol. 8, no. 2–3, pp. 85–283, 2014.\n\n[3] Gao, Leo, et al. \"Scaling and evaluating sparse autoencoders.\" The Thirteenth International Conference on Learning Representations.\n\n\n---\n\nHope the elaboration above addresses your concern and if so, we would respectivefuly hope you could re-evaluate the ratining. Also, please do not hesitate to learn us know if you have more questions."
+      }
+    },
+    "id": "F5TqqDiI9F",
+    "forum": "UspMJlGusi",
+    "replyto": "50IyC4m3CD",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission2712/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission2712/Authors"
+    ],
+    "number": 25,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission2712/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764309800377,
+    "cdate": 1764309800377,
+    "tmdate": 1764309800377,
+    "mdate": 1764309800377,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Scaling Attention via Feature Sparsity",
+    "display_title": "Official Review of Submission2712 by Reviewer gwpA",
+    "content": {
+      "summary": {
+        "value": "This paper proposes a novel method of introducing sparsity along the feature dimension of attention computation. Specifically, instead of directly introducing sparsity on the attention matrix, the paper proposes to instead introduce in the key and query matrices by retaining only the top-$k$ largest magnitude entries along the feature dimension. Naively, the full attention matrix requires $O(n^2)$ memory to store and process, but the authors combined this sparsity idea with FlashAttention, which processes attention weights by a tiling mechanism that only requires a compact score buffer.\n\nExperiments show that the proposed method achieves significant latency reduction while retaining most of the performance of dense models with only minimal degradations, measured both in terms of PPL (pre-training setup) and NIAH/Math/QA performance (post-training setup). Additionally, the paper also shows that sparsity patterns can be easily introduced by fine-tuning, thus opening the door of converting dense pre-trained models into sparse models for more efficient inference."
+      },
+      "soundness": {
+        "value": 2
+      },
+      "presentation": {
+        "value": 4
+      },
+      "contribution": {
+        "value": 4
+      },
+      "strengths": {
+        "value": "1. The simplicity of the method is quite impressive considering how significant of an efficiency gain it was able to achieve.\n2. Performance preservation has been verified thoroughly, covering both LLM pre-training and post-training measures."
+      },
+      "weaknesses": {
+        "value": "1. One main drawback of the paper is the lack of discussion and comparison with the DeepSeek Multi-Head Latent Attention, which computes a low-rank compression of the key/value pairs. To me, there is a pretty significant resemblance between those two ideas, even though MLA did not explicitly explore sparsity. Some form of detailed discussion on the differences of those two ideas and some empirical comparison would further highlight the benefit of the proposal.\n2. Another minor complaint is that the experiments are mostly on toy tasks and are of pretty small model scale. I know the authors might be limited by the compute they can access, but it would be great if there's at least one experiment on a medium-scale model (7B-14B) which verifies that the latency benefit is able to extrapolate over model scale."
+      },
+      "questions": {
+        "value": "1. For Table 1, how is the \"Best\" in \"Best results highlighted\" defined? I'm confused because SFA numbers are highlighted on the OWT/Pile scale even though dense models achieved lower numbers.\n2. For Table 2, your dense model has a dimension size of 2. Is that really the case? That looks like a typo to me because there is an experiment with $k=8$ below.\n3. Can you clarify on the comment on L376 -- \"sparse kernels incur lookup overhead\"? What overhead are you referring to?"
+      },
+      "flag_for_ethics_review": {
+        "value": [
+          "No ethics review needed."
+        ]
+      },
+      "rating": {
+        "value": 6
+      },
+      "confidence": {
+        "value": 3
+      },
+      "code_of_conduct": {
+        "value": "Yes"
+      }
+    },
+    "id": "9ZXFfmSuqU",
+    "forum": "UspMJlGusi",
+    "replyto": "UspMJlGusi",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission2712/Reviewer_gwpA"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission2712/Reviewer_gwpA"
+    ],
+    "number": 2,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission2712/-/Official_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1761748425486,
+    "cdate": 1761748425486,
+    "tmdate": 1764359316762,
+    "mdate": 1764359316762,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission2712 by Reviewer gwpA",
+    "display_title": "Official Comment by Authors",
+    "content": {
+      "comment": {
+        "value": "We sincerely thank you for the positive and thoughtful assessment of our work. These comments have been invaluable in improving the clarity, precision, and overall quality of the paper. Below, we respectfully address each of your points in detail.\n\n---\n\n**Q1**: One main drawback of the paper is the lack of discussion and comparison with the DeepSeek Multi-Head Latent Attention, which computes a low-rank compression of the key/value pairs. To me, there is a pretty significant resemblance between those two ideas, even though MLA did not explicitly explore sparsity. Some form of detailed discussion on the differences of those two ideas and some empirical comparison would further highlight the benefit of the proposal.\n\n**A1:** Good point! We provide both a conceptual discussion and an empirical evaluation demonstrating that **SFA is orthogonal to MLA** and can be combined to achieve further efficiency gains, as detailed below:\n\n**1.Feature-Level Sparsity vs. Low-Rank Compression**\nWhile both methods address efficiency, they operate on different principles and stages:\n\n*   **MLA (Low-Rank Compression):** MLA essentially functions as a low-rank KV compression technique (similar in spirit to MQA/GQA). Its primary optimization lies in the **decoding stage**, where it absorbs the key up-projection matrix into the query projection to reduce memory bandwidth usage. However, the underlying computation remains dense (matrix multiplication), and MLA **does not** inherently reduce FLOPs during the **prefilling (training)** stage.\n*   **SFA (Feature-Level Sparsity):** SFA operates by inducing sparsity in the **feature representation** (selecting Top-$k$ channels). Unlike MLA's dense-to-dense compression, SFA transforms dense vectors into sparse ones. **This reduces FLOPs during both prefilling and decoding.** \n\n\n**2. Experimental Results**\nFurther, we integrated SFA into the MLA framework and observed that **the combination delivers significant additional efficiency gains.** Benchmark results are shown below: \n\n*Table 1.* Benchmark Comparison with MLA and SFA\n\n| Model | Variant | Latency Decode $\\downarrow$ (ms) | Latency Forward $\\downarrow$ (s) | PPL $\\downarrow$ (OWT/Pile) | Acc PiQA $\\uparrow$ | Acc LAMBDA $\\uparrow$ | Acc ARC-e $\\uparrow$ | Acc ARC-c $\\uparrow$ | Acc HellaS $\\uparrow$ | Acc Avg $\\uparrow$ |\n| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |\n| **GPT2 124M** | Dense (full) | 17.08 | 16.86 | 17.29 | 42.74 | 22.78 | 28.35 | 8.12 | 19.61 | 24.32 |\n| | MLA | 5.04 | 15.39 | 17.38 | 42.83 | 22.29 | 28.37 | 7.94 | 19.66 | 24.22 |\n| | MLA + SFA | **3.98** | **15.05** | 19.07 | 41.13 | 21.92 | 27.88 | 7.06 | 19.01 | 23.40 |\n| **Qwen3 0.6B** | Dense (full) | 80.84 | 77.65 | 4.66 | 62.47 | 34.82 | 45.41 | 20.35 | 33.95 | 39.40 |\n| | MLA | 8.74 | 68.92 | 4.69 | 62.39 | 34.71 | 45.41 | 20.17 | 34.21 | 39.38 |\n| | MLA + SFA | **6.72** | **65.29** | 4.9 | 61.22 | 33.94 | 43.36 | 19.25 | 33.94 | 38.34 |\n\nAs shown in **Table 1**, combining SFA with MLA **yields consistent efficiency gains across models**:\n- GPT2-124M: The combination reduced decoding latency from**5.04 ms to 3.98 ms** ($\\approx$ 21% speedup) and prefill (forward) latency from **15.39 ms to 15.05 ms**, with only a negligible drop in average accuracy (24.22 to 23.40). \n- Qwen3. Similarly, the combination reduced decoding latency from **8.74 ms to 6.72 ms** ($\\approx$ 23% speedup) and prefill latency from **68.92 ms to 65.29 ms**, while maintaining competitive performance (Avg Acc 38.34 vs. 39.38).\n\nThese results confirm that **SFA provides distinct benefits over MLA alone**, specifically by offering further latency reductions in both prefilling and decoding through feature sparsity. Following your suggestions, we have included this discussion in **Appendix E**. We will merge these experimental results into the main table in final version."
+      }
+    },
+    "id": "fAe50PzD31",
+    "forum": "UspMJlGusi",
+    "replyto": "9ZXFfmSuqU",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission2712/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission2712/Authors"
+    ],
+    "number": 4,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission2712/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764039445208,
+    "cdate": 1764039445208,
+    "tmdate": 1764039445208,
+    "mdate": 1764039445208,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission2712 by Reviewer gwpA",
+    "display_title": "Official Comment by Authors",
+    "content": {
+      "comment": {
+        "value": "**Q2:** Another minor complaint is that the experiments are mostly on toy tasks and are of pretty small model scale. I know the authors might be limited by the compute they can access, but it would be great if there's at least one experiment on a medium-scale model (7B-14B) which verifies that the latency benefit is able to extrapolate over model scale.\n\n**A2:** Following your suggestion, we conducted additional evaluations on the **Qwen3-8B** model and found that **the latency benefits of SFA extrapolate well while maintaining (and in some cases improving) performance**, as detailed below:\n\n- **Latency Benefits** As shown in **Table 1**, SFA ($k=16$) significantly accelerates inference compared to the dense baseline, reducing decoding latency from 0.72 to **0.59** ms/token **($\\approx$ 18% speedup)** and prefill latency from 3.68 to **2.93** ms/token **($\\approx$ 20% speedup)**.\n\n*Table 1*:  Latency Comparison under Qwen3-8B with 16k context length.\n| Model        |   Variant   | Decode Latency@16k(s) | Forward Latency@16k(s) |\n| :----------- | :---------: | :----------------: | :-----------------: |\n| **Qwen3-8B** | Dense(full) |        0.72        |        3.68         |\n|              |  SFA ($k=16$)  |        0.59        |        2.93         |\n\n- **Compatitive Performance:** As shown in **Table 2**, SFA maintains robust performance on standard benchmarks (GSM-8K, Arxiv, PubMed). Notably, on the NIAH task(ie, long-context tasks), SFA **demonstrates superior long-context retention**, **maintaining 100% accuracy up to 16k context and 97% at 32k**, whereas the base model degrades to 97% and 92% respectively.\n\n*Table 2:* Benchmark results under Qwen3-8B\n| Model | Variant | GSM-8K | Arxiv | PubMed | NIAH 4096 | NIAH 8192 | NIAH 16384 | NIAH 32768 |\n| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |\n| **Qwen3-8B** | Base | 87.62 | 40.13 | 37.22 | 100 | 100 | 97 | 92 |\n| | Fine-tune | 89.11 | 54.26 | 55.07 | 100 | 100 | 99 | 95 |\n| | SFA ($k=16$) | 87.99 | 52.74 | 52.61 | **100** | **100** | **100** | **97** |\n|||||\n\nOverall, these 8B-scale results indicate that the favorable speed–accuracy trade-off of SFA extrapolates well to medium-sized models. This validates that SFA is not limited to small-scale tasks; instead, **it effectively trades a negligible amount of theoretical capacity for significant real-world speedups and improved long-context robustness.** These detailed results have been added to **Table 3** of the revised manuscript.\n\n---\n\n**Q3:** For Table 1, how is the \"Best\" in \"Best results highlighted\" defined? I'm confused because SFA numbers are highlighted on the OWT/Pile scale even though dense models achieved lower numbers.\n\n**A3:** We apologize for the confusion. To clarify: \"Dense (full)\" serves as *reference value* rather than a direct competitor for efficiency. We consider the **\"Short\" embedding** (feature-level operation) as **the primary baseline** for our method. We have updated the caption in **Table 1** and the text in **Section 4.1** to explicitly state this definition.\n\n---\n\n**Q4:** For Table 2, your dense model has a dimension size of 2. Is that really the case? That looks like a typo to me because there is an experiment with $k=8$ below.\n\n**A4:** Thanks for your careful reading! Indeed, this is a typo. We have revised it to the correct version in the revision, and the correct version is $d=64$.\n\n---\n\n**Q5:** Can you clarify on the comment on L376 -- \"sparse kernels incur lookup overhead\"? What overhead are you referring to?\n\n**A5:** According to **Algorithm 1** in the appendix, the inner product of sparse vectors will incur the cost of binary search. However, despite this, SFA still achieved better speedup, which demonstrates the potential for further optimization of sparse computing.\n\n---\nWe are sincerely grateful for your thoughtful and constructive feedback. Your comments have been invaluable in guiding us to further improve and refine the manuscript. We truly appreciate the time and expertise you devoted to reviewing our work, and we would be more than happy to provide any additional clarification should further questions arise. Please do not hesitate to reach out if you have any additional comments or questions."
+      }
+    },
+    "id": "jZ64wnWuKl",
+    "forum": "UspMJlGusi",
+    "replyto": "9ZXFfmSuqU",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission2712/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission2712/Authors"
+    ],
+    "number": 5,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission2712/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764039594684,
+    "cdate": 1764039594684,
+    "tmdate": 1764041455182,
+    "mdate": 1764041455182,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Comment by Authors",
+    "display_title": "Thanks for the Response",
+    "content": {
+      "title": {
+        "value": "Thanks for the Response"
+      },
+      "comment": {
+        "value": "i would like to thank the authors for the very thorough response to my review and the extra results within the short turnaround. All my concerns have been addressed.\n\nI have read the other reviewer's comments and the discussions. The main concern seems to be the lack of baselines, which has been significantly improved with the supplemental results in the author response. I concur with reviewer 5rhv that some insights into *why* the improvements were achieved would have been nice, but not a must because the empirical results are good enough to make this paper interesting.\n\nOverall I'm more confident that this is a good paper that should be accepted so I'm upgrading my score to 8."
+      }
+    },
+    "id": "rB42lOYd8l",
+    "forum": "UspMJlGusi",
+    "replyto": "jZ64wnWuKl",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission2712/Reviewer_gwpA"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission2712/Reviewer_gwpA"
+    ],
+    "number": 19,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission2712/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764215860129,
+    "cdate": 1764215860129,
+    "tmdate": 1764215860129,
+    "mdate": 1764215860129,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Thanks for the Response",
+    "display_title": "Official Comment by Authors",
+    "content": {
+      "comment": {
+        "value": "**Q3:** Why the improvements were achieved\n\n**A3:** Unlike dense low-rank compression, TopK sparsification keeps Q/K in a high-dimensional space and only selects a few salient coordinates per token. This lets the model utilize a rich overcomplete feature space while maintaining a small effective dimension. Our load-balance experiment in the appendix F confirms that many different features are actively used across tokens, suggesting that TopK makes more effective use of the high-dimensional representation than dense compression under a lower compute budget.\n\n---\n\nHope this elaboration address your questions and please let us know if there is more to clarify!"
+      }
+    },
+    "id": "FsZrbe3Ko9",
+    "forum": "UspMJlGusi",
+    "replyto": "rB42lOYd8l",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission2712/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission2712/Authors"
+    ],
+    "number": 27,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission2712/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764310870622,
+    "cdate": 1764310870622,
+    "tmdate": 1764310870622,
+    "mdate": 1764310870622,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission2712 by Reviewer gwpA",
+    "display_title": "Official Comment by Authors",
+    "content": {
+      "comment": {
+        "value": "We are thrilled to receive your positive feedback! We sincerely thank you for recognizing the value and novelty of our work and for upgrading your score. We sincerely thank you for the careful reading and highly constructive suggestions! We are happy to further address your remaining questions.\n\n---\n\n**Q1**. Why top-k feature sparsification preserves semantic information?\n\n**A1**. That is a very valid question and we should have provided more background on this. Using sparse features for compressing high-dimensional inputs has been a long-standing important research topic in signal processing and machine learning, related to a number of fields including dictionary learning [1], compressed sensing [2], etc. In recent literature like CSR and SAE, sparse vectors also achieve high compression rate for dense neural embeddings. This is all based on the common finding that high-dimensional signal can often be well approximated by a few sparsely activated salient features (and there are a number of scenarios that it outperforms low-rank methods like SVD). This motivates us to explore the use of sparse features for attention computing. \n\n**QK has Low intrinsic dimensionality.** A core reason why features are compressible is that high-dimensional features, in practice, often lie in a low-dimensional manifold. To see this, we further conduct an SVD analysis (see Figure 11 in Appendix L of revision) of the QK vectors, which we find that for a head dimension of $d=128$, the effective rank is only around **50-60**. This indicates that the semantic information is highly compressible.\n\n**How sparse activation (eg TopK or ReLU) preserves semantic information.** In NNs, there are two main ways to obtain sparse features, threshold-based activation (e.g., ReLU), and topk-based activation (e.g., TopK). Both approaches select the most salient activations, just based on different criteria. After end-to-end training, NNs will adapt to these sparse activations and learn to activate most important semantic features for LM prediction.\n\n**TopK vs ReLU.** A recent work, TopKSAE[3] from OpenAI shows that TopK activation outperforms ReLU by significant margins (better sparsity at similar semantic preservation, and better semantics under the same sparsity). Also, since TopK maintains a constant level of sparsity, it is also more hardware friendly for efficiency. Therefore, we choose adopt TopK as the sparse activation. But the method (attention computing with sparse features) is generic and extendable to other sparse activation as well.\n\n---\n\n**Q2:** Why a fixed choice such as (k=16) works robustly across models and tasks.\n\n**A2:** When choosing a sparse activation function (either ReLU or TopK), one hopes it to be rather generic and robust to new data, and does not need domain-specific hyperparameter finetuning. \n\nFor example, for ReLU with $f(x)=\\max(x,0)$, people do not adjust the threshold $0$ for different domains, but instead let NNs adapt to it via end-to-end training on different data. \n\nFor the same reason, we adopt the same $k$ for controlling the overall sparsity of models and let NNs to adapt to it on different data and domains. The TopkSAE papers shows that TopK activation is also robust to different data and domains and does not need domain-specific tuning. In our experiments, we do observe that $k=16$ places the model on a superior Pareto frontier compared to other compression techniques.\n\nThus, we believe that either ReLU or TopK, one has to set a prefined threshold (e.g. 0 for ReLU) or K (16 for ours) as the overall sparsity levels. And NNs through end-to-end training is able to adapt to such criteria and find the most salient features to be activated for the final prediction. While domain-specific hyperparameter tuning can very likely yield some additional gains, it would add too much additional costs. We find that even without it, SFA can already attain superior feature compression on a broad range of data and tasks.\n\nRef:\n\n[1] Aharon, Michal, Michael Elad, and Alfred Bruckstein. \"K-SVD: An algorithm for designing overcomplete dictionaries for sparse representation.\" IEEE Transactions on signal processing 54.11 (2006): 4311-4322.\n\n[2] J. Mairal, F. Bach, and J. Ponce, “Sparse Modeling for Image and Vision Processing,” Foundations and Trends in Computer Graphics and Vision, vol. 8, no. 2–3, pp. 85–283, 2014.\n\n[3] Gao, Leo, et al. \"Scaling and evaluating sparse autoencoders.\" The Thirteenth International Conference on Learning Representations."
+      }
+    },
+    "id": "SiAyyRkikA",
+    "forum": "UspMJlGusi",
+    "replyto": "9ZXFfmSuqU",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission2712/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission2712/Authors"
+    ],
+    "number": 26,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission2712/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764309995888,
+    "cdate": 1764309995888,
+    "tmdate": 1764310704621,
+    "mdate": 1764310704621,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Scaling Attention via Feature Sparsity",
+    "display_title": "Official Review of Submission2712 by Reviewer FnGK",
+    "content": {
+      "summary": {
+        "value": "The paper addresses the $O(n^2d)$ computational bottleneck of self-attention in Transformers. While existing methods focus on sparsity along the sequence axis, this paper explores an \"orthogonal axis: feature sparsity\". The authors propose Sparse Feature Attention (SFA). SFA represents queries (Q) and keys (K) as \"k-sparse codes\", claiming to reduce the attention cost from $\\Theta(n^2d)$ to $\\Theta(n^2k^2/d)$. To implement this efficiently, the paper introduces FlashSFA, an \"IO-aware kernel that extends FlashAttention\"  to operate on sparse overlaps without materializing dense score matrices. Experiments on GPT-2 and Qwen3 pretraining show SFA matches dense baselines while improving speed and reducing FLOPs and KV-cache."
+      },
+      "soundness": {
+        "value": 2
+      },
+      "presentation": {
+        "value": 3
+      },
+      "contribution": {
+        "value": 2
+      },
+      "strengths": {
+        "value": "1. **Originality**: The paper's primary strength is shifting the optimization focus from the token axis to the \"feature axis\". This approach is \"orthogonal to token-level sparsity and paging\".\n\n2. **Theoretical Idea**: The concept of using k-sparse codes to reduce the computational complexity of the $QK^\\top$ interaction is novel.\n\n3. **Empirical Quality** (as reported): The reported results, if verifiable, suggest that SFA can maintain \"comparable quality to dense attention\" (Table 1 , Table 3 ) in pretraining and fine-tuning scenarios."
+      },
+      "weaknesses": {
+        "value": "* 1. **Reproducibility**: The paper's central empirical results (e.g., \"up to 2.5×\" speedup , Figure 3 , Figure 5 ) are entirely dependent on the \"IO-aware kernel\" FlashSFA. This kernel is positioned as a primary contribution. However, the paper provides only high-level pseudocode (Algorithm 1 ) and a brief description (Appendix C). The kernel code itself, which is essential for reproducing any of the speedup benchmarks, is not provided.\n  * Parallelism Model: How are CUDA threads, warps, and blocks mapped to the tile computations? How are the nested loops (Line 2, Line 4) parallelized?\n  * Atomic Operations: How are the \"scatter-adds\" to the `scores` buffer (Line 11) handled? Multiple threads processing different features will inevitably write to the same `scores[r, c]` location, requiring atomic operations which are not mentioned but are critical for correctness and performance.\n  * Memory Management: The algorithm hides all memory access patterns. How are reads from the sparse `Q` and `K` structures (e.g., `Q_indices`, `Kf_indices`) coalesced for efficient HBM bandwidth usage? How is the `scores` buffer  truly managed in SRAM (shared memory) across threads?\n  * Core Data Structures: The algorithm relies on a non-standard $CSC_{feat}(\\overline{K})$ format. The precise memory layout of this \"feature-wise\" CSC matrix is not defined.\n  * Search Implementation: The efficiency of `BINARY_SEARCH_RANGE` (Line 7) is crucial. Its implementation details in a parallel CUDA environment are non-trivial and un-discussed.\n\n* 2. **Complexity Analysis that Ignores the P@V Bottleneck**: The paper's headline cost analysis, $\\Theta(n^2k^2/d)$ (Abstract, Section 3.1), is confusing. This analysis only accounts for the $QK^\\top$ computation. The authors explicitly state they are \"keeping V dense\". The authors admit in their own Appendix B.2 that \"a large proportion of the floating-point operations in the sparse version come from matrix multiplication in the P@V stage\". This non-sparsified $O(n^2 d_v)$ operation remains a quadratic bottleneck. The paper's main analysis in Section 3.1 ignores this, and the resulting speculative claim of a \"reduction of more than 1000x\" is unsubstantiated as it omits a dominant, quadratic term that the authors themselves acknowledge.\n\n* 3. **Core Operational Cost (Top-k) in Analysis**: The paper's efficiency analysis in Section 3.1 omits the computational cost of the $Topk_k$ operation (Eq. 3). This operation must be performed on both Q and K matrices (size $n \\times d$) for every forward and backward pass. While the authors mention using an \"RTopK kernel\" and \"lookup overhead\", they never incorporate this non-trivial (e.g., $O(ndk)$ or $O(nd \\log d)$) cost into their formal complexity model, making that analysis incomplete.\n\n* 4. **Limited Applicability and Inherent Distribution Shift**: The authors' own experiments in Section 5 demonstrate that applying SFA to pretrained models \"introduces a severe distribution shift\". The authors' solution is a multi-stage, regularized fine-tuning process, which requires \"an additional MSE loss\" and even pre-finetuning on another dataset. This implies the method's high adaptation cost."
+      },
+      "questions": {
+        "value": "1. Can the authors provide the corresponding implementation details for the FlashSFA kernel, wrt the above questions in W1?\n\n2. Can the authors provide a revised complexity analysis for the entire SFA block, including the $O(ndk)$ or $O(nd \\log d)$ cost of Top-k and the $O(n^2 d_v)$ cost of the P@V multiplication? How does this revised, complete analysis affect the scaling claims?\n\n3. Given that P@V is a \"large proportion\" of the FLOPs, why was V not sparsified? Did the authors experiment with this, and if so, what was the impact on performance?\n\n4. The $k^2/d^2$ scaling analysis (Eq. 7) relies on an assumption that \"supports are balanced across dimensions\". Is there empirical evidence for this? What happens to performance and cost if the feature selection is unbalanced?"
+      },
+      "flag_for_ethics_review": {
+        "value": [
+          "No ethics review needed."
+        ]
+      },
+      "details_of_ethics_concerns": {
+        "value": "No ethics review needed."
+      },
+      "rating": {
+        "value": 4
+      },
+      "confidence": {
+        "value": 4
+      },
+      "code_of_conduct": {
+        "value": "Yes"
+      }
+    },
+    "id": "orOiFWZOb1",
+    "forum": "UspMJlGusi",
+    "replyto": "UspMJlGusi",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission2712/Reviewer_FnGK"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission2712/Reviewer_FnGK"
+    ],
+    "number": 3,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission2712/-/Official_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1761890098648,
+    "cdate": 1761890098648,
+    "tmdate": 1764359316601,
+    "mdate": 1764359316601,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission2712 by Reviewer FnGK",
+    "display_title": "A Correction Regarding My Previous Review",
+    "content": {
+      "title": {
+        "value": "A Correction Regarding My Previous Review"
+      },
+      "comment": {
+        "value": "Dear Authors,\n\nAfter revisiting the paper and carefully re-examining the complexity analysis in Section 3.1 and the FLOPs data in Appendix B.2 over the past few days, I would like to correct a factual error in my original review regarding **Weakness 2 (\"Complexity Analysis that Ignores the P@V Bottleneck\")**.\n\nIn my initial review, I stated that \"keeping V dense\" implies the $P \\times V$ operation remains a dense $O(n^2 d_v)$ quadratic bottleneck. I now realize this interpretation was incorrect. I understand now that while $V$ is stored densely, the attention score matrix $P$ is sparse (containing only entries for overlapping features). Consequently, the accumulation $O_i = \\sum_j P_{ij}V_j$ is performed only over the non-zero indices of $P$. This is empirically supported by Table 6, which shows a massive reduction in total FLOPs (e.g., from 35.67 TFLOPS to 1.15 TFLOPS at 65k context) that would be impossible if the P@V stage were fully dense.\n\nTherefore, I withdraw the specific claim that the method retains a \"quadratic bottleneck\" in terms of arithmetic complexity (FLOPs). I have also revised the score accordingly.\n\nHowever, this correction leads to a revised question regarding the **IO efficiency** of this step:\n\n**Revised Question on P@V:**\nWhile the *arithmetic* cost of P@V is reduced to be proportional to the sparse overlaps, the *memory access* pattern for $V$ becomes irregular. Since $V$ is dense but accessed via sparse indices derived from dynamic query-key overlaps, this suggests potential non-coalesced memory reads (gather operations) from global memory. Could you clarify how FlashSFA handles these irregular reads from $V$? Specifically, does the overhead of non-contiguous memory access to $V$ diminish the theoretical gains from reduced FLOPs, and how does the kernel implementation mitigate this latency?\n\nI am very sorry for the trouble and wasted time the author caused by the error in the previous review, and I look forward to your response."
+      }
+    },
+    "id": "hCYKvmCNyh",
+    "forum": "UspMJlGusi",
+    "replyto": "orOiFWZOb1",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission2712/Reviewer_FnGK"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission2712/Reviewer_FnGK"
+    ],
+    "number": 2,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission2712/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1763726163176,
+    "cdate": 1763726163176,
+    "tmdate": 1763726163176,
+    "mdate": 1763726163176,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to A Correction Regarding My Previous Review",
+    "display_title": "Official Comment by Authors",
+    "content": {
+      "comment": {
+        "value": "We sincerely appreciate your constructive comments and thoughtful suggestions, which are highly valuable for further improving the quality of our paper. We have carefully considered all the points you raised and have addressed each of your concerns in detail below.\n\n---\n\n**Q1: Kernel Implemententation.**\n\n**A1:** Thanks for your professional question. **We will definitely release all FlashSFA kernel codes after the paper is accepted.**\n\n>1. Parallelism Model (threads / warps / blocks and the nested loops) How are CUDA threads, warps, and blocks mapped to the tile computations? How are the nested loops (Line 2, Line 4) parallelized?\n\n**A1.1:** The kernel follows the same tiling as the dense FlashAttention kernel, the only difference is how the tile of scores is produced:\n- **Grid → row tiles and BH**\n  The grid is $grid = \\big(\\lceil N / B_r \\rceil, BH\\big)$, so `blockIdx.x` chooses a row tile of height (B_r), and `blockIdx.y` chooses the batch–head pair.\n- **Block size and per-block row coverage**\n  - Threads per block: `kNumThreads = 32 * kMmaTileSeqLenQ * kMmaTileSeqLenK` (here $32*8*1=256$ → 8 warps).\n  - Each block covers `Br = 16 * kMmaTileSeqLenQ * kWarpTileSeqLenQ` rows (here $16*8*1=128$ rows).\n- **Warp → 16-row stripe; columns iterated by Tc**\n  - Each warp is assigned a disjoint stripe of 16 rows within the $B_r$ rows.\n- **Thread**\n  - Within a warp, each thread is responsible for a small 2×2 patch of the score tile (two rows × two columns). Across all threads in the warp, these patches exactly tile the warp’s part of the score block.\n\n- **Loops Parallelization**\n\n    - Line 2 (rows within tile): As CUDA mappings above, row tiles are distributed across blocks; within a block, the 8 warps process disjoint 16-row stripes in parallel.\n    - Line 4 (nnzs within row): For each assigned row, a lane iterates its CSR segment $t \\in [qb,qe)$ sequentially and accumulates into its `(r0/r1)×(c0/c1)` outputs; parallelism comes from processing many rows and column-pairs across lanes/warps/blocks simultaneously. Inside each row, non-zeros are scanned sequentially.\n\n> 2. Atomic Operations: How are the \"scatter-adds\" to the scores buffer (Line 11) handled? Multiple threads processing different features will inevitably write to the same scores[r, c] location, requiring atomic operations which are not mentioned but are critical for correctness and performance.\n\n**A1.2:** **No atomic operations are needed for the scores**:\n\n- Each output score `S[r, c]` in a tile is owned by exactly one thread (via the fixed 2×2 patch mapping above).\n- That thread accumulates **all contributions** for its `S[r, c]` in registers while looping over nnz and column tiles.\n\nWe never have multiple threads writing to the same `S[r, c]`, so there is no need for `atomicAdd` or any other atomic operation.\n\n>3. Memory Management: The algorithm hides all memory access patterns. How are reads from the sparse Q and K structures (e.g., Q_indices, Kf_indices) coalesced for efficient HBM bandwidth usage? How is the scores buffer truly managed in SRAM (shared memory) across threads?\n\n**A1.3:**\n- **For Q** we store `Q_indptr[0..N]`, `Q_indices[0..nnzQ)` and `Q_values[0..nnzQ)`. Each block owns a consecutive row range `[r0, r0 + Br)`. We first determine the nnz span $[q_{lo}, q_{hi}) = [Q_{indptr}[r_0],; Q_{indptr}[r_0 + B_r])$, which is **one contiguous segment** of `Q_indices` and `Q_values` in HBM.\n- **For K** we use a standard CSC triple, but with column index = feature ID `f` and row index = key ID `j`. This layout makes it easy to intersect a query’s active features with the keys in a given column tile.\n- **(Coalescing for K)** For a given key tile `[j0, j0 + Bc)`:\n    - From the Q-tile’s nonzeros we collect a set of **active features**.\n    - For each active feature `f`, we restrict its posting list to the current key tile (`[j0, j0 + Bc)`), obtaining a subrange `[p_lo(f), p_hi(f))` inside the contiguous array `Kf_indices`.\n    - Warps then cooperatively load these `Kf_indices[p]` and `Kf_values[p]` with lane-strided patterns like $p = p_{lo} + lane + 32 \\cdot k$. \n    - **So each subrange is read as a contiguous slice of HBM and staged into shared memory.**\n\n> 4. Core Data Structures: The algorithm relies on a non-standard $CSC_{feat}(\\bar K)$ format. The precise memory layout of this \"feature-wise\" CSC matrix is not defined.\n\n**A1.4:** $CSC_{feat}(\\bar{K})$ means K is stored in a Compressed Sparse Column (CSC) format where the **columns are features** and the **rows are keys**. So instead of “column = key, row = feature” (which is the usual `[N_key, d]` layout), we flip the view:\n\n- **Column index = feature ID `f`**\n- **Row index = key ID `j`**\n\nThis approach is to make it easier to find the overlap of non-zero values."
+      }
+    },
+    "id": "twsn1xLhST",
+    "forum": "UspMJlGusi",
+    "replyto": "hCYKvmCNyh",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission2712/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission2712/Authors"
+    ],
+    "number": 13,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission2712/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764040678987,
+    "cdate": 1764040678987,
+    "tmdate": 1764040678987,
+    "mdate": 1764040678987,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Comment by Authors",
+    "display_title": "Official Comment by Authors",
+    "content": {
+      "comment": {
+        "value": "**Q1: Kernel Implemententation.**\n\n> 5. Search Implementation: The efficiency of BINARY_SEARCH_RANGE (Line 7) is crucial. Its implementation details in a parallel CUDA environment are non-trivial and un-discussed.\n\n**A1.5:**\n- `BINARY_SEARCH_RANGE` is used to restrict each feature’s posting list to the current key tile `[j0, j0 + Bc)`. For feature `f`, we have a sorted 1D array `Kf_indices[Kf_indptr[f] : Kf_indptr[f+1])` We need:\n    - `p_lo(f)`: first position with `Kf_indices[p] ≥ j0`\n    - `p_hi(f)`: first position with `Kf_indices[p] ≥ j0 + Bc`\n- For each active `(feature, tile)` pair, a **single thread** runs a scalar binary search over the relevant slice of `Kf_indices` to find `p_lo` and `p_hi`. The loop has a fixed number of iterations and is branch-regular, so it compiles to a small sequence of comparisons and index updates in registers.\n- Once `p_lo` and `p_hi` are found, the warp cooperatively streams the subrange `[p_lo : p_hi)` into shared memory using coalesced loads as described above.\n\n**We will release the complete CUDA kernel, so that all of these design choices are fully transparent.**"
+      }
+    },
+    "id": "Ll7s16kBjT",
+    "forum": "UspMJlGusi",
+    "replyto": "twsn1xLhST",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission2712/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission2712/Authors"
+    ],
+    "number": 14,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission2712/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764040747442,
+    "cdate": 1764040747442,
+    "tmdate": 1764040747442,
+    "mdate": 1764040747442,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Comment by Authors",
+    "display_title": "Official Comment by Authors",
+    "content": {
+      "comment": {
+        "value": "**Q2**: Complexity Analysis that Ignores the P@V Bottleneck\n\n**A2**: Please refer to **A9** for our answer to the revised question.\n\n---\n\n**Q3**: The paper's efficiency analysis in Section 3.1 omits the computational cost of the $TopK_k$ operation (Eq. 3). This operation must be performed on both Q and K matrices (size $n \\times d$) for every forward and backward pass. While the authors mention using an \"RTopK kernel\" and \"lookup overhead\", they never incorporate this non-trivial (e.g., $O(ndk)$ or $O(nd\\text{log}d)$) cost into their formal complexity model, making that analysis incomplete.\n \n\n**A3:** Thanks for your comments. **In SFA, we employ the RTop-K for sparsifying Q/K with $O(Nd)$ computational complexity.** \n\nSpecifically, RTop-$k$ implements unsorted Top-$k$ using GPU-parallelized binary search, where each warp processes the Top-$k$ selection for a single feature row. A comparison of its actual execution time against that of the attention kernel is presented in the table below. Experimental results indicate that the actual execution time constitutes a negligible fraction of the total attention computation; therefore, the Top-$k$ operation does not represent a bottleneck in the attention mechanism.\n\n*Table 1.* Top-$k$ Latency\n\n| Context | 1024 | 4096 | 8192 | 16384 | 32768 | 65536 |\n| :--- | :---: | :---: | :---: | :---: | :---: | :---: |\n| `torch.topk` | 0.730 | 2.701 | 5.336 | 10.684 | 21.205 | 42.374 |\n| RTop-$k$ | 0.221 | 0.589 | 1.089 | 2.080 | 4.057 | 8.080 |\n| *Ratio of TopK(%)* | *10.51* | *2.10* | *1.96* | *1.90* | *1.03* | *0.51* |\n\n---\n\n**Q4:**  Limited Applicability and Inherent Distribution Shift: The authors' own experiments in Section 5 demonstrate that applying SFA to pretrained models \"introduces a severe distribution shift\". The authors' solution is a multi-stage, regularized fine-tuning process, which requires \"an additional MSE loss\" and even pre-finetuning on another dataset. This implies the method's high adaptation cost.\n\n**A4:** To clarify, the fine-tuning experiments in Section 5 are intended to study how to **retrofit an already dense pretrained model into an SFA-based model**. In this specific setting, we found that a multi-stage procedure with an additional MSE regularization term is helpful.\n\nFor practical users, this extra cost is not inherent to SFA. When **the pretrained model itself is trained with SFA from scratch** (as in the pretraining experiments of Section 4.1), downstream fine-tuning proceeds is exactly same with a standard dense model: **a single-stage fine-tuning on the target task, with no additional loss terms, auxiliary datasets, or special procedures required.**\n\n---\n\n**Q5:** Can the authors provide the corresponding implementation details for the FlashSFA kernel, wrt the above questions in W1?\n\n**A5:** Please see **A1**.\n\n---\n\n**Q6:** Can the authors provide a revised complexity analysis for the entire SFA block, including the $O(ndk)$ or $O(ndlogd)$ cost of Top-k and the \n$O(n^2d_v)$ cost of the P@V multiplication? How does this revised, complete analysis affect the scaling claims?\n\n**A6:** Please see **A3.**\n\n---\n\n**Q7:** Given that P@V is a \"large proportion\" of the FLOPs, why was V not sparsified? Did the authors experiment with this, and if so, what was the impact on performance?\n\n**A7:** Please see **A9**.\n\n---\n\n**Q8:** The $k^2/d^2$scaling analysis (Eq. 7) relies on an assumption that \"supports are balanced across dimensions\". Is there empirical evidence for this? What happens to performance and cost if the feature selection is unbalanced?\n\n**A8:** **In practice, we observe that the Top-$k$ coordinate distribution of SFA is close to balanced across layers and heads, so the assumption made in Eq.7 holds well.** In detail we visualize the normalized entropy(where $1.0$ indicates perfectly uniform distribution)of the Top-$k$ index distribution across heads and layers in Qwen3. We found that:\n\n- **$Q$-heads**: For the 16 $Q$-heads, normalized entropy ranges from $0.88$ to $0.98$ (Average: **0.94**).\n- **$K$-heads**: For the 8 $K$-heads, normalized entropy ranges from $0.85$ to $0.97$ (Average: **0.93**).\n\nOverall, these measurements show that SFA maintains nearly balanced feature activations in practice, and the balanced-load approximation in Eq.7 is empirically justified for our setting. We've included this visualization in **Appendix F.**"
+      }
+    },
+    "id": "wGnAh8J25e",
+    "forum": "UspMJlGusi",
+    "replyto": "Ll7s16kBjT",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission2712/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission2712/Authors"
+    ],
+    "number": 15,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission2712/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764040906793,
+    "cdate": 1764040906793,
+    "tmdate": 1764040906793,
+    "mdate": 1764040906793,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission2712 by Reviewer FnGK",
+    "display_title": "Official Comment by Authors",
+    "content": {
+      "comment": {
+        "value": "**Q9** : Could you clarify how FlashSFA handles these irregular reads from $V$? Specifically, does the overhead of non-contiguous memory access to $V$ diminish the theoretical gains from reduced FLOPs, and how does the kernel implementation mitigate this latency?\n\nWe sincerely appreciate your careful re-reading of the paper and your thoughtful comments on the $P @ V$ computation. Your question touches an important implementation detail of FlashSFA.\n\n> Consequently, the accumulation $O_i = \\sum_j P_{ij}V_j$ is performed only over the non-zero indices of $P$.\n\n**A9.1:** In both our theoretical analysis and experiments, we have observed that **once $Q$ and $K$ are sparsified, the attention score matrix $P$ also becomes sparse**, so the computation of $P @ V$ becomes a sparse matrix–matrix multiplication (SpMM) with sparse $P$ and dense $V$.\n\n> Could you clarify how FlashSFA handles these irregular reads from $V$?\n\n**A9.2:** **The memory access pattern of $V$, in our implementation, remains largely contiguous** like memory access pattern of $K$. \n- Both $P$ and $V$ are stored row-major in HBM, and the nonzero structure of $P$ is encoded like $Q$. \n- During the $P \\cdot V$ SpMM, for each nonzero $P_{ij}$ in $P_{tile}$, the warp cooperatively loads row $j$ of $V$, whose elements are stored contiguously. \n- Binary search is not necessary here since V is dense. As a result, the rows of $V$ are fetched using warp-coalesced, row-vectorized loads guided by the nnz indices in $P$, rather than via scattered, random accesses.\nWe have clarified this point in the revised manuscript to make explicit that, although $P$ is sparse, the data layout and traversal order ensure that the reads of $V$ are still effectively contiguous and well-suited to GPU memory hierarchies.\n\n>Specifically, does the overhead of non-contiguous memory access to $V$ diminish the theoretical gains from reduced FLOPs? How does the kernel implementation mitigate this latency?\n\n**A9.3:** Thanks for your insightful suggestion for diagnosing FlashSFA kernel. **We experimentally confirm that memory access to $V$ is negligible and does not diminish the theoretical gains from reduced FLOPs.**\n\nSpecifically, we profiled the HBM bandwidth of both the Dense and FlashSFA kernels. Given that **Flash Attention-based kernels are typically compute-bound, arithmetic latency can mask actual memory performance.** Therefore, we conducted **an ablation study by benchmarking a \"memory-only\" version of the kernels (labeled \"w/o compute\")**, where the computation logic is disabled to isolate memory throughput. Results are presented in Table 2.\n\nAs shown in the \"w/o compute\" columns, FlashSFA achieves a high physical bandwidth of **919.38 GB/s**. While this is slightly lower than the Dense baseline (**1194.34 GB/s**), it is significantly higher than the effective bandwidth observed in the full kernel (**17.14 GB/s**).\n\nThis confirms that the latency of the full kernel is mainly caused by the saturation of compute units, not by memory access to $V$. Consequently, **the primary bottleneck limiting theoretical gains is the algorithmic design of the sparse computation, not memory bandwidth.** We are actively addressing this in our future work by refining the fused kernel with state-of-the-art SpGEMM (for $Q @ K^T$) and SpMM (for $P @ V$) optimizations.\n\n*Table 2.* HBM Bnadwidth Comparison\n\n| **Kernel** | Dense | Dense w/o compute | FlashSFA | FlashSFA w/o compute |\n| :--- | :---: | :---: | :---: | :---: |\n| **HBM Bandwidth(GB/s)** | 14.22 | 1194.34 | 17.14 | 919.38 |\n\n---\n\nWe sincerely thank you for the careful reading and highly constructive suggestions. Your feedback strengthened the completeness and clarity of our paper, and we greatly appreciate the time and expertise you dedicated to improving our work. All corresponding revisions have now been incorporated into the updated version."
+      }
+    },
+    "id": "Hqxz4zI3oJ",
+    "forum": "UspMJlGusi",
+    "replyto": "orOiFWZOb1",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission2712/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission2712/Authors"
+    ],
+    "number": 16,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission2712/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764041135292,
+    "cdate": 1764041135292,
+    "tmdate": 1764041332265,
+    "mdate": 1764041332265,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Comment by Authors",
+    "display_title": "Official Comment by Reviewer FnGK",
+    "content": {
+      "comment": {
+        "value": "Thank you for the **incredibly thorough and convincing** response. I have read your answers to my questions (as well as the Q&A with other reviewers) and found them very detailed and convincing. I believe my previous questions have been resolved quite well. \n\nI am fully satisfied with your explanation regarding the P@V memory access. The update to Algorithm 1 clarifying the contiguous row-reads for $V$ makes the implementation details much clearer. Additionally, the inclusion of strong baselines like MLA and token-sparse methods, along with the entropy analysis in Appendix F, has significantly strengthened the paper's soundness.\n\n**I have raised my score to 8.**\n\nI have two remaining minor questions for clarification. Please feel free to answer these briefly or conceptually; I do not expect new complex experiments or lengthy write-ups for these, as they are just for better understanding of the method.\n\n* **On MLA + SFA Composition**: regarding the new results in Table 1 (Response to Reviewer gwpA), could you briefly clarify where the Top-k sparsification is applied within the MLA architecture? Is it applied to the up-projected (recovered) Key/Value heads, or directly in the compressed latent space?  *My personal curiosity is*: If it's the latter, does enforcing Top-k in a compressed latent space (which is already a dense compression of information) risk conflicting with the MLA's design?\n\n* **On Memory Alignment**: Your explanation regarding the coalesced row-reads for $V$ is very convincing. In your current kernel implementation, does this efficiency rely on strict constraints for the head dimension $d_v$ (e.g., must be a multiple of 32 or 128 bytes to align with cache lines)? I am just curious if the performance is sensitive to non-standard head dimensions.\n\nI hope this paper will be accepted at this year's ICLR."
+      }
+    },
+    "id": "K404tknhYD",
+    "forum": "UspMJlGusi",
+    "replyto": "Hqxz4zI3oJ",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission2712/Reviewer_FnGK"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission2712/Reviewer_FnGK"
+    ],
+    "number": 17,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission2712/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764042422848,
+    "cdate": 1764042422848,
+    "tmdate": 1764042422848,
+    "mdate": 1764042422848,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission2712 by Reviewer FnGK",
+    "display_title": "Official Comment by Authors",
+    "content": {
+      "comment": {
+        "value": "We sincerely appreciate your update and we are glad that hear that we addressed your previous concerns on FlashSFA details. We are happy to further address your remaining questions.\n\n---\n\n**Q1:** Could you briefly clarify where the Top-k sparsification is applied within the MLA architecture?\nIn MLA, the attention score computation during decoding is optimized as:\n\n$$\n\\text{Score} = Q \\cdot ({W^{UK}}^T \\cdot {c^{KV}}^T)=( Q \\cdot {W^{UK}}^T ) \\cdot {c^{KV}}^T\n$$\n\nTherefore, one of the core parts of MLA is to directly use the latent vector for attention calculation. So we applied SFA to the latent vector $c^{KV} \\in \\mathbb{R}^{N \\times d_c}$ .\n\n---\n\n**Q2:** Does enforcing Top-k in a compressed latent space (which is already a dense compression of information) risk conflicting with the MLA's design?\n\nWe thank the reviewer for this insightful question.\n\nYes, directly applying Top-$k$ in a highly compressed low-rank space would indeed conflict with MLA's design. However, **we resolve this conflict by increasing the dimension of the latent space $d_c$ to minimize information loss.** Below is our detailed analysis:\n\nWe agree that in standard MLA, the latent vector $c_{KV}$ is a dense, extremely compressed representation. According to the theory of **Superposition** [1], neurons in such a constrained space are \"polysemantic\", distinct features interfere with each other and are superimposed into the same dimensions. \n\nInspired by recent work on Sparse Autoencoders(SAE)[2,3], we expand the latent dimensionality. The expanded space enables monosemantic representation of features, thereby reducing interference between them.\n\nRef:\n\n[1] Elhage, Nelson, et al. \"Toy models of superposition.\" arXiv preprint arXiv:2209.10652 (2022).\n\n[2] Gao, Leo, et al. \"Scaling and evaluating sparse autoencoders.\" The Thirteenth International Conference on Learning Representations.\n\n[3] Wen, Tiansheng, et al. \"Beyond Matryoshka: Revisiting Sparse Coding for Adaptive Representation.\" Forty-second International Conference on Machine Learning.\n\n---\n\n**Q3:** If the performance is sensitive to non-standard head dimensions.\n\n**A3:** Our current kernel **does not rely on strict constraints on the head dimension $d_v$.**\n\n- Each warp cooperatively loads a row $V_j$ **along the feature dimension**, and threads in the warp access consecutive elements of that row.\n- We use vectorized loads whenever possible, and if $d_v$ is not divisible by the vector width, a small “tail” loop handles the remaining elements(1~3) with scalar loads.\n- This tail only affects the last few memory transactions of a row, so the loss in memory coalescing is small compared to the total traffic per row.\n\nIn addition, **while “non-standard” head dimensions $d_v$ do not become bottleneck in our implementation**, we do follow a recommended access pattern to better utilize memory bandwidth. Specifically, for `fp16` value matrices $V$, we typically let each thread in a warp load a `half2` vector along the feature dimension. In this way, the warp issues fully coalesced global memory accesses.\n\n---\n\nHope this elaboration address your questions and please let us know if there is more to clarify!"
+      }
+    },
+    "id": "rEudR0SFSE",
+    "forum": "UspMJlGusi",
+    "replyto": "orOiFWZOb1",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission2712/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission2712/Authors"
+    ],
+    "number": 20,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission2712/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764308551656,
+    "cdate": 1764308551656,
+    "tmdate": 1764309109746,
+    "mdate": 1764309109746,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Comment by Authors",
+    "display_title": "Official Comment by Reviewer FnGK",
+    "content": {
+      "comment": {
+        "value": "Thank you for your detailed answers. I have no further questions. I will read the related work the author referred to to better understand their responses. This is an **excellent work**, and the amount of work the author demonstrated during the rebuttal and the detailed answers to the questions were impressive."
+      }
+    },
+    "id": "jaHFH3pxMj",
+    "forum": "UspMJlGusi",
+    "replyto": "rEudR0SFSE",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission2712/Reviewer_FnGK"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission2712/Reviewer_FnGK"
+    ],
+    "number": 21,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission2712/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764308827571,
+    "cdate": 1764308827571,
+    "tmdate": 1764308827571,
+    "mdate": 1764308827571,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Scaling Attention via Feature Sparsity",
+    "display_title": "Official Review of Submission2712 by Reviewer Q1QB",
+    "content": {
+      "summary": {
+        "value": "The authors propose a feature sparse attention to improve the prefill time efficiency. They provide a FlashSFA kernel which integrates their idea into flash attention kernel. They show that models can be trained from scratch to get reasonably close perplexity and downstream accuracy as compared to dense models."
+      },
+      "soundness": {
+        "value": 2
+      },
+      "presentation": {
+        "value": 2
+      },
+      "contribution": {
+        "value": 2
+      },
+      "strengths": {
+        "value": "1. Feature sparsity is not well explored in literature to the best of my knowledge. This paper does that\n2. Opensource FlashSFA kernel that be used by the community."
+      },
+      "weaknesses": {
+        "value": "1. Lack of baselines.\n2. experiments are not convincing. There is degradation in quality when compared to baseline. Requires separate training for retrieval task."
+      },
+      "questions": {
+        "value": "1. Does FlashSFA also provide improvement in time to next token (TTNT)? From what i understand it can only provide improvement in time to first token(TTFT). In table 2 the speedups refer to TTFT or TTNT?\n\n2.Related to above, given a $k$, what is the memory footprint of storing $k$ indices for one row in CSR format isnt it $3k$? So if we had d=64, $k < 64/3$ is required to get any memory gains.  is that correct understanding?\n\n3. While the paper dismisses sparsity at sequence level as degrading accuracy, we do not see any comparison with such methods in experiments. sparsity in training (NSA / DSA) would be good baselines in my understanding. Can Authors elaborate more on the what are good baslines for FlashSFA in sparse attention techniques. \n\n4. Related to above, the FlashSFA also shows degradation across the board compared to baseline. So it is reasonable to compare against other sparse attention techniques at training time. \n\n5. The fact that we had to train for retreival tasks indepdnently from scratch is a bit worrying. It might have something to do with the information bottleneck in SFA. In principle we are looking for a model that can do all of the tasks. training for specific task is against the foundational model paradigm. \n\n6. How does top-k coordinate distribution look like in practice. Equation 7 assumes that it is balanced. But in practice (atleast in the case of dense models), some channels can show outlier distribution (See AWQ quantization).\n\n7. Also, authors mention that the benefits are multiplicative and their technique can be combined with sequence-sparse attention methods.  Is there some evidence to this effect in authors' experiments / literature."
+      },
+      "flag_for_ethics_review": {
+        "value": [
+          "No ethics review needed."
+        ]
+      },
+      "rating": {
+        "value": 4
+      },
+      "confidence": {
+        "value": 4
+      },
+      "code_of_conduct": {
+        "value": "Yes"
+      }
+    },
+    "id": "S0syYTVeX7",
+    "forum": "UspMJlGusi",
+    "replyto": "UspMJlGusi",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission2712/Reviewer_Q1QB"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission2712/Reviewer_Q1QB"
+    ],
+    "number": 4,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission2712/-/Official_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1761937898517,
+    "cdate": 1761937898517,
+    "tmdate": 1762916339032,
+    "mdate": 1762916339032,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission2712 by Reviewer Q1QB",
+    "display_title": "Official Comment by Authors",
+    "content": {
+      "comment": {
+        "value": "We sincerely thank you for your thorough reading and thoughtful comments. We truly appreciate the time and care you invested in reviewing our work. Following your insightful suggestions, we have substantially expanded the discussions and conducted additional experiments on SFA. We deeply value your feedback, and we respectfully address each of your concerns point-by-point below. We hope our clarifications and revisions successfully resolve all the issues you raised and help strengthen the manuscript.\n\n---\n\n**Q1**: Does FlashSFA also provide improvement in time to next token (TTNT)? From what i understand it can only provide improvement in time to first token(TTFT). In table 2 the speedups refer to TTFT or TTNT?\n\n**A1**: **FlashSFA improves both TTFT and TTNT** as it replaces dense attention with sparse feature attention, accelerating attention computation across both the prefilling and decoding stages.\n\nAs shown in **Figure 6(b)** and **Table 1** below, with a relatively small $K$, **FlashSFA does achieves acceleration in the next token prediction stage.** Since SFA **sparsifies the feature vectors themselves**, both **prefilling(TTFT) and decoding(TTNT) are dominated by the same inner-product operations**, the resulting speedups naturally carry over to both stages.\n\n*Table 1.*: Time to next token (ms/step)\n\n| Context           |  4096  |  8192  | 16384  | 32768  | 65536  | KV-cache |\n| :---------------- | :----: | :----: | :----: | :----: | :----: | :------: |\n| **Dense (d=128)** | 0.1452 | 0.2513 | 0.4117 | 0.7577 | 1.4455 |    1     |\n| SFA ($k=16$)        | 0.1348 | 0.217  | 0.3772 | 0.6645 | 1.2963 |  0.688   |\n| SFA ($k=8$)         | 0.1155 | 0.2008 | 0.3269 | 0.5901 | 1.0675 |  0.594   |\n\n---\n\n**Q2:** Related to above, given a $k$, what is the memory footprint of storing $k$ indices for one row in CSR format isnt it $3k$ ? So if we had d=64, $k<64/3$ is required to get any memory gains. is that correct understanding?\n>Given a $k$, what is the memory footprint of storing $k$ indices for one row in CSR format isnt it $3k$ ?\n\n**A2.1:** Thanks for your question. No, the memory footprint is **not** $3k$ per row. In CSR, a row with $k$ non-zeros stores $k$ values, $k$ column indices, and only **$1$** row-pointer entry.\n\n>So if we had d=64, $k<64/3$ is required to get any memory gains. is that correct understanding?\n\n**A2.2:** In our implementation, **memory gain can be achieved when $k < \\frac{2}{3}d$**. The memory savings of SFA compared to the dense model depend on the data precision used to store the `col_indices` array and `row_pointer` array in the CSR matrix.\n\nFor a CSR matrix with shape $(N, d)$ where each row has a fixed number of $k$ non-zero values, the required bytes for each component are calculated as follows.\n\n- **`value` array memory**:\n\n$$\nMem_{value} = (N \\times k) \\times S_{val}\n$$\n\n- **`indices` array memory**:\n\n$$\nMem_{indices} = (N \\times k) \\times S_{idx}\n$$\n\n- **`indptr` array memory** (length is $N+1$):\n\n$$\nMem_{indptr} = (N + 1) \\times S_{ptr}\n$$\n\nWhere $S$ denotes the number of bytes for the data format.\n\nTherefore, the total memory consumption of the CSR format is the sum of these three parts:\n$$\nMem_{csr} = Mem_{value} + Mem_{indices} + Mem_{indptr}\n$$\n\nSubstituting the above formulas, we obtain the final memory consumption formula:\n\n$$\nMem_{csr} = (N \\times k \\times S_{val}) + (N \\times k \\times S_{idx}) + ((N + 1) \\times S_{ptr})\n$$\n\nThis can be further simplified to:\n\n$$\nMem_{csr} = N \\times k \\times (S_{val} + S_{idx}) + (N + 1) \\times S_{ptr}\n$$\n\nConsequently, compared to a dense matrix of the same shape, the ratio of memory consumption is:\n$$\nRatio = \\frac{Mem_{dense}}{Mem_{csr}} = \\frac{N \\times d \\times S_{val}}{N \\times k \\times (S_{val} + S_{idx}) + (N + 1) \\times S_{ptr}}\\approx \\frac{d \\times S_{val}}{k \\times (S_{val} + S_{idx}) + S_{ptr}}\n$$\nAs the QK feature dimension in Transformers is generally small, `indices` are typically stored in `int8` format and `indptr` in `int32` format. When we use `fp16/bf16` to store the `value` array:\n$$\nRatio = \\frac{Mem_{dense}}{Mem_{csr}} \\approx \\frac{d \\times 2}{k \\times (2 + 1) + 4} = \\frac{2d}{3k + 4} \\approx \\frac{2d}{3k}\n$$\n\n**For the clarity of the paper, we have added the above explanations to Appendix J of the revision.**"
+      }
+    },
+    "id": "fFvjPdhYug",
+    "forum": "UspMJlGusi",
+    "replyto": "S0syYTVeX7",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission2712/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission2712/Authors"
+    ],
+    "number": 9,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission2712/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764040152257,
+    "cdate": 1764040152257,
+    "tmdate": 1764041573593,
+    "mdate": 1764041573593,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Comment by Authors",
+    "display_title": "Official Comment by Authors",
+    "content": {
+      "comment": {
+        "value": "**Q3**: While the paper dismisses sparsity at sequence level as degrading accuracy, we do not see any comparison with such methods in experiments. sparsity in training (NSA / DSA) would be good baselines in my understanding. Can Authors elaborate more on the what are good baslines for FlashSFA in sparse attention techniques.\n\n>we do not see any comparison with such methods in experiments. sparsity in training (NSA / DSA) would be good baselines in my understanding.\n\n**A3.1:** Following your suggestion, we have added experiments with Longformer (representing fixed token sparsity) and NSA (representing dynamic token sparsity). The results are presented in **Table 2** and **Table 3** below. To demonstrate the orthogonality between SFA and token-level sparsity methods, we also conducted experiments **combining token-level sparsity with SFA**. **Experimental results show that SFA can be combined with Sparsity in Training methods like NSA to further improve efficiency.**\n\n*Table 2.* GPT-2 124M Results\n\n| Variant | Latency (TTNT)(ms) | Latency (TTFT) | PPL (OWT) | PiQA | LAMBDA | ARC-e | ARC-c | HellaS | Avg |\n| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |\n| Dense (full) | 17.08 | 16.86 | 17.29 | 42.74 | 22.78 | 28.35 | 8.12 | 19.61 | 24.32 |\n| Longformer | 6.75 | 7.93 | 18.73 | 41.28 | 21.27 | 28.02 | 7.01 | 18.92 | 23.30 |\n| Longformer+SFA| **5.23** | **6.18** | 19.30 | 40.75 | 20.54 | 26.39 | 6.63 | 17.24 | 22.31 |\n| SFA| 14.12 | 9.41 | 18.17 | 41.62 | 21.03 | 28.41 | 7.39 | 19.26 | 23.54 |\n\n*Table 3.* Qwen3 0.6B Results\n\n| Variant | Latency (TTNT)(ms) | Latency (TTFT) | PPL (Pile) | PiQA | LAMBDA | ARC-e | ARC-c | HellaS | Avg |\n| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |\n| Dense (full) | 80.84 | 77.65 | 4.66 | 62.47 | 34.82 | 45.41 | 20.35 | 33.95 | 39.40 |\n| NSA | 9.73 | 20.32 | 4.57 | 62.69 | 35.01 | 45.10 | 20.47 | 34.42 | 39.54 |\n| NSA+SFA | **8.85** | **17.17** | 4.95 | 60.02 | 33.58 | 42.74 | 18.31 | 32.48 | 37.43 |\n| SFA | 66.29 | 34.20 | 4.81 | 61.73 | 34.05 | 45.62 | 19.27 | 34.03 | 38.94 |\n\nAdditional results show that SFA is orthogonal to token sparse method. We have incorperated these results in **Appendix E**. We will merge these experimental results into the final version."
+      }
+    },
+    "id": "Y6VMfUmtZF",
+    "forum": "UspMJlGusi",
+    "replyto": "fFvjPdhYug",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission2712/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission2712/Authors"
+    ],
+    "number": 10,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission2712/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764040364586,
+    "cdate": 1764040364586,
+    "tmdate": 1764040364586,
+    "mdate": 1764040364586,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Comment by Authors",
+    "display_title": "Official Comment by Authors",
+    "content": {
+      "comment": {
+        "value": "**Q3**: While the paper dismisses sparsity at sequence level as degrading accuracy, we do not see any comparison with such methods in experiments. sparsity in training (NSA / DSA) would be good baselines in my understanding. Can Authors elaborate more on the what are good baslines for FlashSFA in sparse attention techniques.\n\n> Can Authors elaborate more on the what are good baslines for FlashSFA in sparse attention techniques.\n\n**A3.2:** We think that **feature-level** compression methods are more suitable as baselines for comparison, such as low-rank[1] and learned projection methods that compress the dimension of feature vectors. **Table4** bellow shows that under a similar acceleration ratio, **SFA achieves better performance compared to low-rank method.**\n\n- **Compare with token-level sparsity**: For given $Q/K \\in \\mathbb{R}^{N \\times d}$, token-Level methods (e.g., Longformer, NSA) *reduce the number of tokens ($N$)* involved in the attention computation. While relevant for context length scaling, they are orthogonal to SFA. **SFA reduces the features (non-zeros in $d$)** involved in the inner product, effectively sparsifying the attention mechanism along a different axis.\n- **Compare with feature-level baselines**: We also consider methods that reduce the feature dimension ($d$) to be highly relevant baselines, such as Low-Rank Approximation [1] and Learned Projections. These methods compress $Q/K$ vectors from $d$ to a smaller dimension $r$.\n\n*Table 4.* Benchmark Results to compression baselines under GPT-124M and Qwen3-0.6B\n\n| Model | Variant | Latency Decode $\\downarrow$ (ms) | Latency Forward $\\downarrow$ (s) | PPL $\\downarrow$ (OWT/Pile) | Acc PiQA $\\uparrow$ | Acc LAMBDA $\\uparrow$ | Acc ARC-e $\\uparrow$ | Acc ARC-c $\\uparrow$ | Acc HellaS $\\uparrow$ | Acc Avg $\\uparrow$ |\n| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |\n| **GPT2 124M** | Dense (full) | 17.08 | 16.86 | 17.29 | 42.74 | 22.78 | 28.35 | 8.12 | 19.61 | 24.32 |\n| | Learned projections ($d=32$) | 8.37 | 7.86 | 20.70 | 39.27 | 19.39 | 25.72 | 6.52 | 14.26 | 21.03 |\n| | Low-Rank | 8.93 | 7.99 | 19.89 | 39.81 | 20.04 | 26.47 | 6.89 | 14.99 | 21.64 |\n| | SFA ($k=8$) | 14.12 | 9.41 | **18.17** | **41.62** | **21.03** | **28.41** | **7.39** | **19.26** | **23.54** |\n| **Qwen3 0.6B** | Dense (full) | 80.84 | 77.65 | 4.66 | 62.47 | 34.82 | 45.41 | 20.35 | 33.95 | 39.40 |\n| | Learned projections ($d=64$) | 38.68 | 30.84 | 6.03 | 58.43 | 31.27 | 41.58 | 15.83 | 28.29 | 35.08 |\n| | Low-Rank | 40.58 | 32.46 | 5.50 | 59.19 | 31.49 | 41.77 | 15.8 | 30.65 | 35.78 |\n| | SFA ($k=16$) | 66.29 | 34.20 | **4.81** | **61.73** | **34.05** | **45.62** | **19.27** | **34.03** | **38.94** |\n\nAs shown in **Table 4**, Low-Rank suffer from significant quality loss due to the aggressive compression of semantic information. In detail:\n- GPT-2 124M: SFA achieves a lower Perplexity (**18.17**) compared to Low-Rank (19.89) and Learned Projections (20.70).\n- Qwen3 0.6B: SFA maintains a high average accuracy of **38.94**, whereas Low-Rank drops to 35.78 and Learned Projections to 35.08.\n\nThis confirms that SFA's selective sparsity preserves representational capacity much better than the global compression used in Low-Rank baselines, making it the better choice for feature-level acceleration. We've inculded this experiment in **Appendix E**. We will merge these experimental results into the final version.\n\nRef: [1] Saxena, Utkarsh, et al. \"Eigen Attention: Attention in Low-Rank Space for KV Cache Compression.\" EMNLP (Findings). 2024."
+      }
+    },
+    "id": "FcLscZZx6N",
+    "forum": "UspMJlGusi",
+    "replyto": "Y6VMfUmtZF",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission2712/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission2712/Authors"
+    ],
+    "number": 11,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission2712/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764040420558,
+    "cdate": 1764040420558,
+    "tmdate": 1764040420558,
+    "mdate": 1764040420558,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission2712 by Reviewer Q1QB",
+    "display_title": "Official Comment by Authors",
+    "content": {
+      "comment": {
+        "value": "**Q4**: Related to above, the FlashSFA also shows degradation across the board compared to baseline. So it is reasonable to compare against other sparse attention techniques at training time. \n\n**A4**: Please see **A3**.\n\n---\n\n**Q5:** The fact that we had to train for retreival tasks indepdnently from scratch is a bit worrying. It might have something to do with the information bottleneck in SFA. In principle we are looking for a model that can do all of the tasks. training for specific task is against the foundational model paradigm.\n\n**A5:** We wish to clarify that **independent training for retrieval tasks is NOT required for SFA.** Specifically, we conducted new experiments where SFA with Qwen3-0.6B is trained on **general language corpora** rather than specific retrieval tasks (with 4k window) and evaluated it in a **zero-shot** setting on the NIAH task. Results are shown in **Table 5** below.\n\n\n*Table 5*. NIAH accuracy (%) within 4k Context Length.\n| Context Length | 1k | 2k | 3k | 4k | Speedup@4k |\n| :--- | :---: | :---: | :---: | :---: | :---: |\n| Dense (full) | 93 | 87 | 79 | 62 | 1.0x |\n| SFA ($k=8$) | 95 | 90 | 80 | 66 | **1.5x** |\n| SFA ($k=16$) | **96** | **90** | **83** | **71** | 1.2x \n\nAs reported in Table 5, SFA not only **works without task-specific supervision but actually outperforms the Dense baseline**:\n*   **Higher Accuracy:** SFA ($k=16$) achieves **71%** accuracy at 4k context, significantly surpassing the Dense model's **62%**. Even with higher sparsity ($k=8$), SFA reaches **66%**.\n*   **Consistent Superiority:** SFA outperforms Dense attention across all context lengths (1k to 4k).\n\nThese findings indicate that SFA’s feature sparsification preserves essential information, allowing it to function effectively as a general-purpose foundation model without requiring independent training for retrieval tasks. We've included this experimental results in **Appendix K**.\n\n\n---\n\n**Q6:** How does top-k coordinate distribution look like in practice. Equation 7 assumes that it is balanced. But in practice (atleast in the case of dense models), some channels can show outlier distribution (See AWQ quantization). \n\n**A6:** As shown in **Figure 7**, we observe that the Top-$k$ coordinate distribution of SFA is **close to be balanced across layers and heads**, so the assumption made in Eq.7 holds well. \n\nSpecifically, we calculated the normalized entropy of the Top-$k$ distribution across heads and layers (where a value of $1.0$ represents a perfectly uniform distribution) and results are shown below:\n\n- For the 16 $Q$-heads in Qwen3, the normalized entropy averages $0.94$.\n- For the 8 $K$-heads in Qwen3, the normalized entropy averages $0.93$. \n\nThese values are very close to the maximum entropy of $1.0$, indicating that the selected Top-$k$ coordinates are **distributed widely across channels** rather than collapsing onto a few specific outliers. Thus,SFA maintains nearly balanced feature activations in practice, and the balanced-load approximation in Eq.7 is empirically justified for our setting. We've included this discussion in **Appendix F**.\n\n---\n\n**Q7:** Also, authors mention that the benefits are multiplicative and their technique can be combined with sequence-sparse attention methods. Is there some evidence to this effect in authors' experiments / literature.\n\n**A7:** Please see **A3**.\n\n---\nWe hope that the explanations provided above adequately address your concerns. Following your valuable suggestions, we have revised and improved the manuscript accordingly. We would be grateful to know whether you find the updated version satisfactory, and we remain very willing to clarify any additional questions you may have."
+      }
+    },
+    "id": "Taw5f91OH6",
+    "forum": "UspMJlGusi",
+    "replyto": "S0syYTVeX7",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission2712/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission2712/Authors"
+    ],
+    "number": 12,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission2712/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764040467461,
+    "cdate": 1764040467461,
+    "tmdate": 1764041529590,
+    "mdate": 1764041529590,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Comment by Authors",
+    "display_title": "Official Comment by Authors",
+    "content": {
+      "comment": {
+        "value": "Dear Reviewer Q1QB,\n\nWe have carefully prepared a detailed response to address each of your questions. Would you please take a look and let us know whether you find it satisfactory?\n\nWe note that Reviewer FnGK and gwpA has appreciated our response. We also respectfully suggest that you could re-evaluate our work with the updated explanations and results.\n\nThanks! Have a great day!\n\nAuthors"
+      }
+    },
+    "id": "2hZk9XmG9V",
+    "forum": "UspMJlGusi",
+    "replyto": "Taw5f91OH6",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission2712/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission2712/Authors"
+    ],
+    "number": 23,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission2712/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764309023947,
+    "cdate": 1764309023947,
+    "tmdate": 1764309023947,
+    "mdate": 1764309023947,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Scaling Attention via Feature Sparsity",
+    "display_title": "Paper Update",
+    "content": {
+      "title": {
+        "value": "Paper Update"
+      },
+      "comment": {
+        "value": "Paper Update\n\nWe sincerely thank all reviewers for their detailed reading and valuable comments. We have carefully responded their concerns, and incorporated these suggestions in the updated manuscript.The main revisions are:\n\n- Table 3: update GSM8K results and add new results under *larger model* :**Qwen3-8B**!\n- **Appendix F (new!): new analysis of Feature Distribution**\n- **Appendix E & G (new!): add extensive new experimental results**\n    - Comparison with **Token-Sparse methods** (Longformer, Routing, NSA)\n    - Comparison with **Quantization-Aware Training method** (LLM-QAT)\n    - Comparison with **KV-Pruning methods** (H2O, Quest, SnapKV)\n    - Comparison with **Low-Rank/Kernel methods** (Loki, Performer, Learned Projections), and DeepSeek’s **MLA**.\n- Appendix H (new!): add new ablation studies of different sparsity levels ($k$) and feature dimensions ($d$)\n- Appendix I (new!): add pre-training curve of SFA on GPT2-124M\n- Appendix J (new!): add memory saving theoretical analysis of SFA\n- Appendix L (new!): add SVD analysis of Query and Key of pretrained Qwen3 model"
+      }
+    },
+    "id": "4ULHEkKd1T",
+    "forum": "UspMJlGusi",
+    "replyto": "UspMJlGusi",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission2712/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission2712/Authors"
+    ],
+    "number": 3,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission2712/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764039112075,
+    "cdate": 1764039112075,
+    "tmdate": 1764309262483,
+    "mdate": 1764309262483,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Scaling Attention via Feature Sparsity",
+    "display_title": "Rebuttal Summary",
+    "content": {
+      "title": {
+        "value": "Rebuttal Summary"
+      },
+      "comment": {
+        "value": "Dear Program Chairs, Senior Area Chairs, Area Chairs, and Reviewers,\n\nWe extend our sincere gratitude to the Program Chairs, Senior Area Chairs, and especially the Area Chairs for their time and effort in coordinating this review process. We also deeply thank all Reviewers for their constructive feedback and active engagement during the discussion phase, which has significantly helped us improve the quality of our work.\n\nTo assist the Area Chair in tracking the progress of our rebuttal and the resulting improvements to the manuscript, **we provide a consolidated summary of the discussion phase below.** This summary outlines the key concerns raised, the extensive additional experiments conducted, and the clarifications provided in the revised version. The main revisions are summarized as follows:\n\n**Extensive experiments & analysis.** The primary constructive feedback across reviews centered on the scope of baselines, scalability, and deeper analysis of our methods. In response, we have conducted a comprehensive suite of additional experiments and theoretical analyses to robustly address these points.\n\n1. **Expanded Baselines & Scalability**:\n- **Comparison and Integration with Token-Sparse methods**, including Longformer and Native Sparse Attention (NSA), now presented in Appendix E (Raised by Reviewer Q1QB, 5rhv).\n- **Comparison and Integration with DeepSeek’s MLA**, now presented in Appendix E (Raised by Reviewer gwpA, 5rhv).\n- **Comparison vs. Low-Rank training/compression methods**, including short-embedding and Learned Projections, now presented in Appendix G (Raised by Reviewer Q1QB, 5rhv).\n- **Comparison and Integration with KV-Pruning and Kernel methods**, including H2O, Quest, SnapKV, Loki, and Performer, now presented in Appendix G (Raised by Reviewer 5rhv).\n- **Scalability Verification (8B Scale)**, We validated SFA on the medium-scale *Qwen3-8B*. Results are now presented in Table 3 (Raised by Reviewer gwpA).\n\n2. **Deeper Analysis & Diagnostics:**\n*   **Zero-Shot Long-Context Eval:** We added zero-shot evaluation on long-context tasks (NIAH) using models trained on general corpora, now presented in Appendix K (Raised by Reviewer Q1QB).\n*   **Feature Activation Balance**: We conduct a detailed load balance analysis of feature activation, now presented in Appendix F (Raised by Reviewer Q1QB, FnGK).\n*   **Memory & Kernel Profiling**: We expanded our system-level analysis to include:\n    *   **Bandwidth Profiling:** We provided detailed profiling (w/ and w/o compute) to substantiate our bandwidth savings claims.(Appendix C.4; Raised by Reviewer FnGK).\n    *   **Access Pattern Analysis:** Clarification of memory access patterns to address \"irregular read\" concerns (Appendix C.4; Raised by Reviewer FnGK).\n    *   **Kernel Complexity:** A theoretical complexity analysis of the RTop-$k$ kernel (Appendix C.5; Raised by Reviewer FnGK).\n    *   **Theoretical memory analysis of CSR Format:** Theoretical memory cost analysis of the Compressed Sparse Row format (Appendix J; Raised by Reviewer Q1QB).\n*   **Sensitivity Ablations:** Ablation studies on sparsity levels ($k$) and feature dimensions ($d$), now presented in Appendix H (Raised by Reviewer 5rhv).\n*   **Training Stability:** We added pre-training loss curves using the Straight-Through Estimator, now presented in Appendix I (Raised by Reviewer 5rhv).\n\n**Additional clarifications.** Besides experiments, we also provided additional discussions and clarifications to address the concerns of reviewers, including:\n\n*   Clarification on Time-to-Next-Token (TTNT) speedup, now presented in Appendix B.1 (Raised by Reviewer Q1QB).\n*   Conceptual explanation of Top-$k$ semantic preservation, now presented in Appendix L (Raised by Reviewer gwpA, 5rhv).\n*   Kernel parallelism model, now presented in Appendix C.2 (Raised by Reviewer FnGK).\n*   Core data structures details, now presented in Appendix C.3 (Raised by Reviewer FnGK)."
+      }
+    },
+    "id": "rg4ge1budY",
+    "forum": "UspMJlGusi",
+    "replyto": "UspMJlGusi",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission2712/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission2712/Authors"
+    ],
+    "number": 22,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission2712/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764308913051,
+    "cdate": 1764308913051,
+    "tmdate": 1764642698996,
+    "mdate": 1764642698996,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Rebuttal Summary",
+    "display_title": "Official Comment by Authors",
+    "content": {
+      "comment": {
+        "value": "**Writing improvements.** We also refined the presentation in the revised version according to reviewers’ suggestions:\n\n*   Typo correction regarding the dimension size ($d=64$), now corrected in Table 2 (Raised by Reviewer gwpA).\n*   Expanded Appendix sections (E, F, G, H, I, J, K, L) to accommodate the new experimental results and theoretical discussions.\n*   Clarified definitions of \"Best results\" in tables to distinguish between reference values and competitive baselines (Raised by Reviewer gwpA).\n\n**Outcome & Score.** Several reviewers acknowledged the additional results and clarifications, and **increased their ratings before Nov 27:**\n*   **Nov 25**: Reviewer FnGK increased the score to **8**, noting \"this is an **excellent work**\".\n*   **Nov 25**: Reviewer gwpA increased the score to **8**, noting \"I'm more confident that this is a good paper that should be accepted\".\n- Reviewer 5rhv “appreciated all the empirical analysis” and requested further clarification on the rationale for sparse features. We supplied additional evidence from several angles; however, because this was submitted shortly before the review freeze, the reviewer did not have time to reply.\n*   Reviewer Q1QB has not engaged in the discussion. We believe that our new experiments (particularly the zero-shot retrieval in Appendix K and load balance analysis in Appendix F) directly address their concerns.\n\n\nOverall, we believe that the extensive new baselines, scalability verification on 8B models, and deeper system-level analyses have addressed the concerns raised by the reviewers.\n\nWe sincerely thank all reviewers for helping us shape this work into a stronger contribution, and we thank you again for your service to the community.\n\nSincerely,\nAuthors"
+      }
+    },
+    "id": "6ZTLSWo8yv",
+    "forum": "UspMJlGusi",
+    "replyto": "rg4ge1budY",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission2712/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission2712/Authors"
+    ],
+    "number": 28,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission2712/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764642798684,
+    "cdate": 1764642798684,
+    "tmdate": 1764642798684,
+    "mdate": 1764642798684,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Scaling Attention via Feature Sparsity",
+    "display_title": "Meta Review of Submission2712 by Area Chair TbuM",
+    "content": {
+      "summary": {
+        "value": "In the first review rounds, the reviewers acknowledged the strengths of the paper being:\n1. contributing to open-source community\n2. solid theoretical and experimental work\n3. simplicity of the work\n\nThe following weaknesses of the work were also raised by the reviewers:\n1. Missing baseline and convincing experiments, as some metrics were not improving.\n2. Analysis is missing several details.\n3. Lack of comparison with MLA and other methods.\n\nMost of the weaknesses were already addressed in the rebuttal."
+      },
+      "reviewer_concerns": {
+        "value": "In the rebuttal, the author clearly addressed \n1. Baselines such as NSA + SFA and Longformer + SFA.\n2. Promise to release the kernel upon acceptance.\n3. Missing analysis mentioned by reviewer FnGK.\n4. Adding experiments on models other than Qwen and comparison with MLA.\n\nOverall, most of the weaknesses, including the questions, were well addressed in the rebuttal."
+      },
+      "reviewer_scores": {
+        "value": "Reviewers FnGK and gwpA will increase the score. Reviewer 5rhv might increase the score as the follow-up comments were addressed."
+      }
+    },
+    "id": "T222sNAR42",
+    "forum": "UspMJlGusi",
+    "replyto": "UspMJlGusi",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission2712/Area_Chair_TbuM"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission2712/Senior_Area_Chairs",
+      "ICLR.cc/2026/Conference/Submission2712/Area_Chair_TbuM"
+    ],
+    "number": 1,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission2712/-/Meta_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1767329848213,
+    "cdate": 1767329848213,
+    "tmdate": 1770618877903,
+    "mdate": 1770618877903,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Meta_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Scaling Attention via Feature Sparsity",
+    "display_title": "Paper Decision",
+    "content": {
+      "title": {
+        "value": "Paper Decision"
+      },
+      "decision": {
+        "value": "Accept (Poster)"
+      },
+      "comment": {
+        "value": ""
+      }
+    },
+    "id": "WYrWBp9eFa",
+    "forum": "UspMJlGusi",
+    "replyto": "UspMJlGusi",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Program_Chairs"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Program_Chairs"
+    ],
+    "number": 1,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission2712/-/Decision",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1769416512526,
+    "cdate": 1769416512526,
+    "tmdate": 1770356493722,
+    "mdate": 1770356493722,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Decision",
+    "license": "CC BY 4.0",
+    "version": 2
+  }
+]
