@@ -1,0 +1,949 @@
+[
+  {
+    "replying_to": "Replying to PRKV:Page Restruct KV Cache for High Accuracy and  Efficiency LLM Generation",
+    "display_title": "Official Review of Submission3974 by Reviewer Vcit",
+    "content": {
+      "summary": {
+        "value": "The paper introduces PRKV, a hybrid key value retrieval framework for long context LLM inference that combines token level reuse with dynamic page level selection.\nPRKV periodically reuses top k tokens from the previous step and a local window, then fills the remaining budget with page selection guided by compact page representations.\nIt restructures the cache so the reused tokens are stored contiguously, which simplifies indexing and reduces memory traffic.\nOn the systems side, PRKV uses a head major layout and a batched copy pipeline from CPU to GPU to cut transfer overheads.\nExperiments on retrieval and reasoning benchmarks show accuracy close to full cache and up to 6.75x end to end speedups over prior offloading methods."
+      },
+      "soundness": {
+        "value": 3
+      },
+      "presentation": {
+        "value": 3
+      },
+      "contribution": {
+        "value": 3
+      },
+      "strengths": {
+        "value": "* The paper propose simple and effective hybrid design which combines prior-step token reuse with dynamic page selection to close the recall gap of page-only methods while keeping estimation overhead low.\n* HND layout and batched KV transfer are broadly reusable optimizations that materially reduce TPOT and drive the reported speedups.\n* Broad and convincing evaluation across multiple models and benchmarks with clear wins in both accuracy and latency."
+      },
+      "weaknesses": {
+        "value": "* The paper relocates static tokens to the front and refreshes every T steps (Alg. 1), but the overhead (CPU time and additional PCIe traffic) of reordering KV pages/indices is not reported.\n* Results stop at 14B‑parameter general models and 8B for reasoning. It remains unclear how PRKV behaves for larger size model, and models with different attention architecture (e.g. DeepSeek).\n* The LongBench evaluation setup seems a bit tricky: The evaluation truncates inputs longer than the model’s context by taking half from the beginning and half from the end, then concatenating. This setup disadvantages the “full cache” baseline and can artificially make PRKV look better than “full attention” because PRKV can still select tokens from the entire document while the baseline never sees the middle. Could you elaborate on the setup?"
+      },
+      "questions": {
+        "value": "* Additionally, the score in the needle-in-a-haystack seems under-specified, making it hard to interpret results. Could you specify how you measure the success, why use Kimi API as the judge model (what about other models as the judge results)?"
+      },
+      "flag_for_ethics_review": {
+        "value": [
+          "No ethics review needed."
+        ]
+      },
+      "rating": {
+        "value": 6
+      },
+      "confidence": {
+        "value": 3
+      },
+      "code_of_conduct": {
+        "value": "Yes"
+      }
+    },
+    "id": "rO6V8YNmqE",
+    "forum": "7FM0GBFhe5",
+    "replyto": "7FM0GBFhe5",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission3974/Reviewer_Vcit"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission3974/Reviewer_Vcit"
+    ],
+    "number": 1,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission3974/-/Official_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1761896042251,
+    "cdate": 1761896042251,
+    "tmdate": 1762917121665,
+    "mdate": 1762917121665,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission3974 by Reviewer Vcit",
+    "display_title": "Response to Reviewer Vcit (Question 1/4)",
+    "content": {
+      "title": {
+        "value": "Response to Reviewer Vcit (Question 1/4)"
+      },
+      "comment": {
+        "value": "**Q1: the overhead of reordering KV pages**\n\n\nAfter recomputing the static set and restructuring the pages, two operations are required. First, the page representations must be updated because the page organization has changed. Second, an asynchronous rewrite is issued to synchronize the restructured KV cache back to the CPU-side KV cache pool, ensuring data consistency.  The work flow in **Figure 22, page 25**. Below reports normal layer latency and layer latency with 2R, across different batch sizes, evaluated on both Llama3.1-8B-Instruct and Qwen2.5-14B-Instruct, and measured in both the prefill and decode phases. \n\n$$\n\\\\begin{array}{l|ccc|ccc}\n\\\\textbf{Model / BS} & \\\\textbf{Prefill(ms)} & \\\\textbf{Prefill w/ 2R(ms)} & \\\\textbf{2R Cost(ms)} & \\\\textbf{Decode(ms)} & \\\\textbf{Decode w/ 2R(ms)} & \\\\textbf{2R Cost(ms)} \\\\\\\\\n\\\\hline\n\\\\textbf{Llama-3.1-8B-Ins} & & & & & & \\\\\\\\\nBS=1 & 265 & 301 & 36 & 1.25 & 1.91 & 0.66 \\\\\\\\\nBS=2 & 544 & 587 & 43 & 1.40 & 2.10 & 0.70 \\\\\\\\\nBS=4 & 1103 & 1146 & 43 & 2.03 & 2.78 & 0.75 \\\\\\\\\n\\\\hline\n\\\\textbf{Qwen-2.5-14B-Ins} & & & & & & \\\\\\\\\nBS=1 & 325 & 366 & 41 & 1.27 & 2.00 & 0.73 \\\\\\\\\nBS=2 & 642 & 694 & 52 & 1.50 & 2.25 & 0.75 \\\\\\\\\nBS=4 & 1289 & 1347 & 58 & 1.98 & 2.77 & 0.79 \\\\\\\\\n\\\\end{array}\n$$\n\nThe $2R \\ Cost$ denotes the overhead incurred by recomputing the static set and restructuring pages. In the prefill stage, this overhead is approximately 40 ms ($8\\%$), imposing a negligible impact on the Time to First Token (TTFT). In the decoding stage, although the overhead is around 0.7 ms ($50\\%$), our periodic update strategy allows this cost to be amortized over the interval $T$. For example, the $T=128$ results in a $0.3\\%$ overhead in each decode step.\n\nFurthermore, the low latency achieved by our system optimizations effectively masks this overhead. Consequently, we still effectively reduce the end-to-end latency.\n\nDetail can be found in $ \\color{red}{\\text{Appendix H, Page 24-25}}$"
+      }
+    },
+    "id": "xKyWv7YbrV",
+    "forum": "7FM0GBFhe5",
+    "replyto": "rO6V8YNmqE",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission3974/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission3974/Authors"
+    ],
+    "number": 9,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission3974/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1763958853524,
+    "cdate": 1763958853524,
+    "tmdate": 1763958853524,
+    "mdate": 1763958853524,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission3974 by Reviewer Vcit",
+    "display_title": "Response to Reviewer Vcit (Question 2/4)",
+    "content": {
+      "title": {
+        "value": "Response to Reviewer Vcit (Question 2/4)"
+      },
+      "comment": {
+        "value": "**Q2-1: evalution for larger size model**\n\nWe provide an additional evaluation on Qwen2.5-32B-Instruct using two A100 GPUs, which represents a larger-scale model.\n\nDetail can be found in $\\color{red}{\\text{Appendix J, Page 26-27}}$\n\n\n**Q2-2: sparse attention on models with different attention architecture(MLA)**\n\nThank you for this insightful question; it raises a critical point for discussion.\n\nWe acknowledge that DeepSeek's Multi-Head Latent Attention (MLA) architecture is highly effective. By compressing Key-Value pairs into low-rank latent matrices via a LoRA-like mechanism and projecting them back into per-head KV caches during inference, MLA significantly reduces memory footprint and enhances inference speed.\n\nHowever, directly applying PRKV to the MLA architecture presents significant challenges. We outline our reasoning as follows:\n\n1. **Context of Prior Work:** Previous research on KV cache sparsity—such as Arkvale, ShadowKV, and SnapKV—has predominantly focused on Multi-Head Attention (MHA) or Grouped-Query Attention (GQA). PRKV is built upon the analysis and optimization foundations established for these standard architectures.\n2. **Technical Constraints (Hypothesis):** To the best of our knowledge, there is currently no existing work addressing sparse methods specifically for MLA. Offering our technical perspective: standard sparse Top-K selection operates on the explicit, per-head KV cache. In contrast, MLA's compressed KV latent has head dimension with 1 (before up-projection). Applying Top-K selection directly to this latent space would imply that **all Query heads must share a single, identical sparse KV set**. We hypothesize that this lack of head-specific granularity would likely lead to a significant degradation in inference performance.\n\nBelow, we give our thought about sparse attention on MLA. For all query heads, one possible idea is to group them in a manner similar to GQA: **different groups of query heads would maintain different sparse KV latents, while query heads within the same group would share a common sparse latent representation**. This design would require maintaining multiple copies of sparse KV latents.\n\nYour question is highly insightful, and **we will consider exploring sparse-attention optimization specifically for MLA in future work**."
+      }
+    },
+    "id": "08AExhUBp1",
+    "forum": "7FM0GBFhe5",
+    "replyto": "rO6V8YNmqE",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission3974/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission3974/Authors"
+    ],
+    "number": 10,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission3974/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1763959051586,
+    "cdate": 1763959051586,
+    "tmdate": 1764072992111,
+    "mdate": 1764072992111,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission3974 by Reviewer Vcit",
+    "display_title": "Response to Reviewer Vcit (Question 3/4)",
+    "content": {
+      "title": {
+        "value": "Response to Reviewer Vcit (Question 3/4)"
+      },
+      "comment": {
+        "value": "**Q3: Clarification of the setting when testing LongBench**\n\nWe thank the reviewer for raising this concern.\nFirstly, We clarify that the truncation strategy used in LongBench—taking half of the tokens from the beginning and half from the end when the input exceeds the model’s context window—is **applied uniformly to all methods**, including the full-cache (full attention) baseline, PRKV, and all other sparse-attention baselines. All methods receive exactly the same truncated input, so the situation where “PRKV can still access the entire document while the full-attention baseline never sees the middle part” **does not occur**.\n\nImportantly, this truncation strategy is **not introduced by our implementation**. It is the **official LongBenchV2 evaluation protocol**(https://github.com/THUDM/LongBench/blob/main/pred.py), as implemented in the public repository (see `pred.py`, lines 28–30 in the official code). We strictly follow the official pipeline to ensure fairness and reproducibility.\n\nFurthermore, LongBench is designed to evaluate whether models can produce the correct answer **given the same truncated input**, which reliably reflects the behavior of sparse-attention algorithms under long-context constraints. Under this unified evaluation setup, we compare PRKV with other sparse baselines and observe that **PRKV consistently outperforms them**. This demonstrates that the performance advantage of PRKV comes from its more effective KV selection mechanism rather than any artifact introduced by the evaluation setup.\n\nWe hope this clarifies the evaluation protocol and confirms that the comparison is fair and consistent with the official LongBench methodology."
+      }
+    },
+    "id": "EEJp9YmtLf",
+    "forum": "7FM0GBFhe5",
+    "replyto": "rO6V8YNmqE",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission3974/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission3974/Authors"
+    ],
+    "number": 11,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission3974/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1763959195069,
+    "cdate": 1763959195069,
+    "tmdate": 1763959195069,
+    "mdate": 1763959195069,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission3974 by Reviewer Vcit",
+    "display_title": "Response to Reviewer Vcit (Question 4/4)",
+    "content": {
+      "title": {
+        "value": "Response to Reviewer Vcit (Question 4/4)"
+      },
+      "comment": {
+        "value": "**Q4: Clarification of the Setting and Evaluation in Needle-in-a-Haystack (NIAH)**\n\nFirst, we clarify how we measure the NIAH success score of LLM outputs.We strictly follow the official NIAH evaluation code from https://github.com/gkamradt/LLMTest_NeedleInAHaystack. The official code predefines scoring levels of **1, 3, 5, 7, and 10**, each with its own scoring criteria, as shown in the documentation. For a given LLM output, we provide the output together with the official scoring **CRITERIA** to an evaluator LLM, and the evaluator assigns a score based on these predefined rules.\n\n```\nCRITERIA = {\n    \"accuracy\": (\n        \"Score 1: The answer is completely unrelated to the reference.\\n\"\n        \"Score 3: The answer has minor relevance but does not align with the reference.\\n\"\n        \"Score 5: The answer has moderate relevance but contains inaccuracies.\\n\"\n        \"Score 7: The answer aligns with the reference but has minor omissions.\\n\"\n        \"Score 10: The answer is completely accurate and aligns perfectly with the reference.\\n\"\n        \"Only respond with a numerical score.\"\n    )\n}\n```\n\nSecond, while the official NIAH code uses the ChatGPT API as the judging model, our experimental environment has network limitations that prevent us from accessing it reliably. Therefore, we use the **Kimi API** as the judge model instead. In our offline tests, the judging results from the ChatGPT API and the Kimi API are **highly consistent**."
+      }
+    },
+    "id": "X16UcsDr85",
+    "forum": "7FM0GBFhe5",
+    "replyto": "rO6V8YNmqE",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission3974/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission3974/Authors"
+    ],
+    "number": 12,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission3974/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1763959272107,
+    "cdate": 1763959272107,
+    "tmdate": 1763959272107,
+    "mdate": 1763959272107,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission3974 by Reviewer Vcit",
+    "display_title": "Official Comment by Authors",
+    "content": {
+      "comment": {
+        "value": "Dear Reviewer,\n\nI hope this message finds you well. As the discussion period is nearing its end with less than three days remaining, I wanted to ensure we have addressed all your concerns satisfactorily. If there are any additional points or feedback you'd like us to consider, please let us know. Your insights are invaluable to us, and we’re eager to address any remaining issues to improve our work.\n\nThank you for your time and effort in reviewing our paper."
+      }
+    },
+    "id": "q8dXV50JOA",
+    "forum": "7FM0GBFhe5",
+    "replyto": "rO6V8YNmqE",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission3974/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission3974/Authors"
+    ],
+    "number": 16,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission3974/-/Official_Comment",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764226004803,
+    "cdate": 1764226004803,
+    "tmdate": 1770918061633,
+    "mdate": 1770918061633,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Comment by Authors",
+    "display_title": "Official Comment by Reviewer Vcit",
+    "content": {
+      "comment": {
+        "value": "Thanks the reviewers for the rebuttal, it has addressed most of my concerns and I decide to keep my score."
+      }
+    },
+    "id": "LsKKDCfcFQ",
+    "forum": "7FM0GBFhe5",
+    "replyto": "q8dXV50JOA",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission3974/Reviewer_Vcit"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission3974/Reviewer_Vcit"
+    ],
+    "number": 18,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission3974/-/Official_Comment",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764275939703,
+    "cdate": 1764275939703,
+    "tmdate": 1770918061095,
+    "mdate": 1770918061095,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to PRKV:Page Restruct KV Cache for High Accuracy and  Efficiency LLM Generation",
+    "display_title": "Official Review of Submission3974 by Reviewer k1cZ",
+    "content": {
+      "summary": {
+        "value": "This paper introduces PRKV, a framework for page-level KV retrieval that combines static reuse and dynamic selection through a “hybrid KV selection” strategy. The authors also propose system optimizations, namely contiguous memory indexing using the HND layout and batched KV transfers to improve retrieval efficiency. PRKV reports up to 6.75× speedup and near-full-cache accuracy across multiple benchmarks."
+      },
+      "soundness": {
+        "value": 2
+      },
+      "presentation": {
+        "value": 2
+      },
+      "contribution": {
+        "value": 1
+      },
+      "strengths": {
+        "value": "1. Clarity and completeness:\nThe paper is reasonably well written and provides a comprehensive experimental evaluation across several standard long-context benchmarks.\n2. Incremental algorithmic variation:\nThe proposed periodic static token update introduces a minor variation to existing retrieval schemes. While not particularly innovative, it reflects an effort to stabilize long-sequence performance by refreshing the static token set."
+      },
+      "weaknesses": {
+        "value": "1. Limited algorithmic novelty:\nThe proposed method largely concatenates two existing paradigms of KV-cache compression, static dropping and dynamic retrieval, without introducing a fundamentally new principle. As a result, the algorithmic contribution is incremental and lacks clear conceptual advancement.\n2. Questionable system design and justification:\nThe claimed system optimizations are not well substantiated. Although the HND layout may simplify head-wise indexing, it is unclear how this layout integrates with modern GPU attention kernels, which typically assume NHD for coalesced access and contiguous memory traversal (as used in FlashAttention and vLLM). Similarly, the batched KV transfer optimization resembles standard engineering practice rather than a substantive research contribution."
+      },
+      "questions": {
+        "value": "1. Please justify how the HND layout efficiently supports GPU attention kernels. Most state-of-the-art implementations (e.g., FlashAttention, FlashInfer) assume NHD layout for coalesced tensor access. Has PRKV been benchmarked with real kernel implementations to confirm compatibility?\n2. The proposed “static token selection” is periodically updated. Does this imply that the entire KV cache must still be retained in CPU memory to enable re-selection? If so, how does this affect the memory footprint compared to fully static methods such as SnapKV?"
+      },
+      "flag_for_ethics_review": {
+        "value": [
+          "No ethics review needed."
+        ]
+      },
+      "rating": {
+        "value": 2
+      },
+      "confidence": {
+        "value": 3
+      },
+      "code_of_conduct": {
+        "value": "Yes"
+      }
+    },
+    "id": "iZluMKod7P",
+    "forum": "7FM0GBFhe5",
+    "replyto": "7FM0GBFhe5",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission3974/Reviewer_k1cZ"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission3974/Reviewer_k1cZ"
+    ],
+    "number": 2,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission3974/-/Official_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1761930230397,
+    "cdate": 1761930230397,
+    "tmdate": 1764360265408,
+    "mdate": 1764360265408,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission3974 by Reviewer k1cZ",
+    "display_title": "Response to Reviewer k1cZ (Question 1/2)",
+    "content": {
+      "title": {
+        "value": "Response to Reviewer k1cZ (Question 1/2)"
+      },
+      "comment": {
+        "value": "Thank you for detailed review and valuable feedback. We hope our detailed clarifications and additional experimental results will address the concerns regarding our work.\n\n**Q1: justify how the HND layout efficiently supports GPU attention kernels**\n\nBoth **NHD** and **HND** layouts are supported in FlashInfer. When the KV cache is stored in **FP16**, their GPU kernel execution efficiency is nearly identical. As stated in the FlashInfer documentation (https://docs.flashinfer.ai/tutorials/kv_layout.html):\n *“we don’t observe significant performance difference between these two layouts on fp16 kV-Cache and we prioritize `NHD` layout for better readability.”* We also conducted our own benchmarking(detailed in $\\color{red}{\\text{Appendix I-Table 4}}$), and the results confirm that HND does not incur additional GPU runtime overhead.\n\n| KV Size | Prefill NHD (ms) | Prefill HND (ms) | Decode NHD (ms) | Decode HND (ms) |\n| :--- | :---: | :---: | :---: | :---: |\n| 4,096 | 1.0358 | 1.2567 | 0.0359 | 0.0320 |\n| 8,192 | 4.9863 | 4.8339 | 0.0331 | 0.0320 |\n| 16,384 | 19.1479 | 19.0742 | 0.0568 | 0.0565 |\n| 32,768 | 76.4648 | 77.2803 | 0.0971 | 0.0956 |\n| 65,536 | 325.6366 | 317.4488 | 0.1809 | 0.1777 |\n| 131,072 | 1548.4492 | 1546.6578 | 0.3658 | 0.3981 |\n\nSince we use FlashInfer as attention backend，the KV-cache layout of GPU is HND. In FlashAttention and vLLM, the KV-cache layout is indeed typically **NHD**. So we can adopt a **hybrid layout**: **NHD on the GPU side and HND on the CPU side**. But our page-level fill-in mechanism remains  regardless of the GPU-side layout. \n\nFinally, our **Contiguous Memory Indexing** in PRKV explicitly optimizes the **CPU-side** KV-cache organization, which is the dominant bottleneck during sparse KV retrieval. The GPU-side layout can be flexibly chosen according to the attention backend (FlashInfer, FlashAttention, vLLM, etc.). Our current Batched KV Transfer implementation already supports **both NHD and HND** on the GPU side, ensuring **full compatibility with real kernel implementations**."
+      }
+    },
+    "id": "LySjcww100",
+    "forum": "7FM0GBFhe5",
+    "replyto": "iZluMKod7P",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission3974/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission3974/Authors"
+    ],
+    "number": 7,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission3974/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1763899275963,
+    "cdate": 1763899275963,
+    "tmdate": 1763899275963,
+    "mdate": 1763899275963,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission3974 by Reviewer k1cZ",
+    "display_title": "Response to Reviewer k1cZ (Question 2/2)",
+    "content": {
+      "title": {
+        "value": "Response to Reviewer k1cZ (Question 2/2)"
+      },
+      "comment": {
+        "value": "**Q2: Difference from static methods such as SnapKV**\n\nFirst, as described in our paper, PRKV stores the entire KV cache in CPU memory, while only keeping the page representations, static tokens, local tokens, and dynamically selected pages in GPU memory during decoding.\n\nSecond, fully static methods such as SnapKV maintain a fixed GPU KV budget  `K`, discarding all other tokens. Thus, their GPU memory cost is always `O(K)`. PRKV follows the same rule: its GPU-side KV footprint is also `O(K)`—consisting of static tokens, local tokens, and dynamic pages. The only additional GPU component is the set of page representations, which requires only `N / page_size` vectors.  The full KV cache is retained only in CPU memory for periodic re-selection, but this incurs no additional GPU cost, and CPU memory is generally abundant and inexpensive.\n\nPRKV maintains the same GPU memory footprint as fully static methods such as SnapKV, while the additional CPU storage enables dynamic re-selection and better long-context retention, without impacting runtime memory efficiency."
+      }
+    },
+    "id": "CpzptoFeDq",
+    "forum": "7FM0GBFhe5",
+    "replyto": "iZluMKod7P",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission3974/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission3974/Authors"
+    ],
+    "number": 8,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission3974/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1763899422916,
+    "cdate": 1763899422916,
+    "tmdate": 1763899422916,
+    "mdate": 1763899422916,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission3974 by Reviewer k1cZ",
+    "display_title": "Clarification of our work to Reviewer k1cZ",
+    "content": {
+      "title": {
+        "value": "Clarification of our work to Reviewer k1cZ"
+      },
+      "comment": {
+        "value": "Regarding the reviewer’s comment on “limited algorithmic and system design novelty ”,  we respectfully disagree.\n\nFirst, we emphasize that the “static set” in PRKV is not dropping-based; instead, PRKV offloads the full KV cache to CPU memory, ensuring that no information is permanently discarded.\n\n**Clarification of Algorithmic Contribution**: We introduce the Attention Recall Rate as a conceptual measure to characterize the accuracy of sparse KV selection strategies. Page-level dynamic selection offers low selection overhead but inevitably performs coarse-grained KV selection, while static token-level methods provide fine-grained KV selection but incur high overhead. PRKV’s hybrid KV selection mechanism is designed to achieve the best of both worlds. Furthermore, we introduce a dynamic hybrid configuration mechanism and page restructuring, enabling PRKV to leverage the computational advantages of page-level operations while retaining fine-grained accuracy.\n\n\n\n**Clarification of System Design and Optimization**: Our system-level design and optimizations are specifically targeted at the **KV offloading** scenario, consistent with prior works such as Arkvale and ShadowKV. However, those prior works largely overlooked optimizations for **KV retrieval** under offloading—an omission that materially affects end-to-end inference latency. By carefully analyzing the retrieval pipeline, we identified two primary bottlenecks: **KV indexing** and **KV copy**. We therefore propose two targeted optimizations: **Contiguous Memory Indexing** and **Batched KV Transfer**. Contiguous Memory Indexing achieves efficient head-wise access by organizing the CPU-side KV cache in the **HND layout**; this optimization is independent of the GPU-side KV layout (see our response to Q2 for supporting evidence and explanation). Batched KV Transfer, while conceptually a common idea, requires careful, non-trivial adaptation to the sparse KV cache retrieval problem (concat fragmented KV pages, consolidating into a pinned buffer, and performing a single bulk transfer) to realize the practical latency reductions reported in our experiments, which is not just a standard engineering practice."
+      }
+    },
+    "id": "uOdeCGym6r",
+    "forum": "7FM0GBFhe5",
+    "replyto": "iZluMKod7P",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission3974/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission3974/Authors"
+    ],
+    "number": 13,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission3974/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764171609995,
+    "cdate": 1764171609995,
+    "tmdate": 1764171609995,
+    "mdate": 1764171609995,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission3974 by Reviewer k1cZ",
+    "display_title": "Official Comment by Authors",
+    "content": {
+      "comment": {
+        "value": "Dear Reviewer,\n\nI hope this message finds you well. As the discussion period is nearing its end with less than three days remaining, I wanted to ensure we have addressed all your concerns satisfactorily. If there are any additional points or feedback you'd like us to consider, please let us know. Your insights are invaluable to us, and we’re eager to address any remaining issues to improve our work.\n\nThank you for your time and effort in reviewing our paper."
+      }
+    },
+    "id": "wFEvjWhX6D",
+    "forum": "7FM0GBFhe5",
+    "replyto": "iZluMKod7P",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission3974/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission3974/Authors"
+    ],
+    "number": 15,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission3974/-/Official_Comment",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764225952275,
+    "cdate": 1764225952275,
+    "tmdate": 1770918061148,
+    "mdate": 1770918061148,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission3974 by Reviewer k1cZ",
+    "display_title": "Official Comment by Reviewer k1cZ",
+    "content": {
+      "comment": {
+        "value": "Thanks for the clarification. I now understand your use of the HND layout for KV cache, and I will adjust my score accordingly.\n\nRegarding the algorithmic contribution, I still find the novelty somewhat limited. Besides combining static and top-K selection, the main algorithmic change appears to be introducing a periodic static token update. \n\nMoreover, in the experiments, this update interval is set to 128, which is quite a large window. This makes me question the claim that “identifying critical KV pairs adds latency to the inference process, as it resides on the CRITICAL PATH”, which is the motivation for all the system optimization. If the static set is only refreshed every 128 steps, then the reconstruction of pages does not actually need to occur at the exact decoding step—it could reasonably be deferred (e.g., compute the scores at step 128 and finalize the reconstruction at step 130, the reconstruction happens on CPU, so you can do that asynchronously). In that case, the latency added by reconstruction would not necessarily lie on the critical path. \n\nI fully acknowledge the engineering effort spent on making reconstruction fast; speed is always valuable. However, the contribution of the paper is not entirely coherent to me."
+      }
+    },
+    "id": "JpTMK08qP7",
+    "forum": "7FM0GBFhe5",
+    "replyto": "iZluMKod7P",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission3974/Reviewer_k1cZ"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission3974/Reviewer_k1cZ"
+    ],
+    "number": 17,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission3974/-/Official_Comment",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764232741732,
+    "cdate": 1764232741732,
+    "tmdate": 1770918061112,
+    "mdate": 1770918061112,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Comment by Reviewer k1cZ",
+    "display_title": "Official Comment by Authors",
+    "content": {
+      "comment": {
+        "value": "Thank you for the constructive and timely follow-up. We appreciate your careful analysis and the opportunity to further clarify the contributions of our work.\n\nClarification of the algorithmic contribution:\n\nAlthough many sparse-attention methods for LLMs have been proposed, existing approaches typically suffer from one of two limitations:1. **High KV estimation overhead and low computational efficiency** (e.g., MagicPIG, InfiniGen, ShadowKV), which can even result in a higher TPOT than before sparsification. 2. **Coarse-grained KV selection**, which leads to noticeable degradation in inference accuracy (e.g., Quest)\n\nOur goal is to design an inference framework that achieves **really low TPOT while maintaining inference accuracy**.\n\n**Contribution 1:** To the best of our knowledge, we are the first to quantitatively analyze the impact of static token reuse and page-level Top-K selection on the Attention Recall Rate metric(figure 2, page 4). This analysis also reveals the feasibility of a hybrid method that jointly maintains recall and efficiency.\n\n**Contribution 2:** We design an online algorithm for determining $\\mathcal{S}$ with low overhead. In the prefill phase, after computing the observation-window attention scores, $S$ (corresponding to line 7 of Algorithm 1), Let $ S^{(1)} $  and $S^{(T)}$ denote the attention score vectors of the first and last query tokens in the prefilling phase observe window, respectively. For each head h, we compute the overlap of their topk key indices using \n\n$$\nC_{h}= \\left|  \\text{topk}\\left(S^{(1)}_{h}, k\\right) \\ \\cap\\  \\text{topk}\\left(S^{(T)} _ h, k \\right) \\right|\n$$\n\n\nThe static ratio is then obtained by averaging the overlap across all heads, $P$ denotes the page size.Then the static ratio is used in the subsequent selection process.\n$$\n\\mathcal{S}=\\frac{P \\cdot \\left\\lfloor  \\frac{\\mathbb{E} _ {h} \\left[C_{h}\\right]} {P}  \\right\\rfloor}{k}\n$$\n\n**Contribution 3:** Furthermore, we introduce a Static Token Selection Algorithm (page 6), and for the periodic update of static tokens, we provide a detailed design for recomputing the static set and restructuring pages (Figure 22, page 25).\n\n\nThe statement on page 6 — “identifying critical KV pairs adds latency to the inference process, as it resides on the CRITICAL PATH” — refers  to the fact that **performing critical-KV identification and selection at every decoding step** would lie on the critical path. It does not refer to page reconstruction.\n\nYour idea about performing asynchronous reconstruction on the CPU is insightful and valuable. However, this asynchronous approach faces two potential challenges:\n\n- the computational performance gap between CPU and GPU-performing a GEMM between the query $Q$ and long-context keys $K$ on the CPU is extremely time-consuming.\n- the need to maintain KV-cache **data consistency** between the GPU-side cache and the CPU-side cache pool.\n- after performing asynchronous reconstruction on the CPU, the updates to the GPU-side KV cache must proceed **sequentially across layers**, because the decoding of each layer depends on the output of the previous one.\n\nSo, as shown in Figure 22 in page 25, we only do page restruction for in GPU KV cache and do asynchronous rewrite to synchronize the restructured KV cache back to the CPU-side KV cache pool, ensuring data consistency."
+      }
+    },
+    "id": "QonQYcL4E5",
+    "forum": "7FM0GBFhe5",
+    "replyto": "JpTMK08qP7",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission3974/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission3974/Authors"
+    ],
+    "number": 19,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission3974/-/Official_Comment",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764309083446,
+    "cdate": 1764309083446,
+    "tmdate": 1770918061310,
+    "mdate": 1770918061310,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to PRKV:Page Restruct KV Cache for High Accuracy and  Efficiency LLM Generation",
+    "display_title": "Official Review of Submission3974 by Reviewer g8ut",
+    "content": {
+      "summary": {
+        "value": "The paper proposes PRKV, a hybrid sparse-attention framework for long-context LLM decoding with KV offloading. It combines a static token-level set built from an observation window (reused and periodically updated) and a dynamic page-level selection. And it reorganizes the KV layout and uses batched transfers to reduce PCIe traffic and kernel launch overhead. Experimental results report state-of-the-art quality under fixed KV budgets and impressive end-to-end speedups over prior offloading baselines."
+      },
+      "soundness": {
+        "value": 2
+      },
+      "presentation": {
+        "value": 2
+      },
+      "contribution": {
+        "value": 2
+      },
+      "strengths": {
+        "value": "- Addresses a practical bottleneck in long-context serving: reducing KV retrieval latency and GPU memory pressure during decoding with CPU offloading, while maintaining quality.  ￼\n- Well-motivated hybrid design by reusing prior top-k with local window to boost attention recall\n- System optimizations are concrete and codesigned with the proposed algorithm"
+      },
+      "weaknesses": {
+        "value": "- Some method knobs are central but their sensitivity and generalization across models or tasks are not fully explored   ￼  ￼\n- A few writing issues slightly obscure otherwise solid ideas.  ￼"
+      },
+      "questions": {
+        "value": "Thank you for the submission. I like the paper overall, the hybrid selection insight is compelling, and the system side is thoughtfully engineered.  However, several descriptions are still vague or underspecified. Clarifications that would strengthen the paper:\n- The authors show higher recall with a hybrid split and reuse and local window. Could you provide principled guidance for choosing S and the local window size across different models/tasks? Extra sensitivity curves beyond the current S-only ablation will be appreciated to better estimate the impact of the proposed method.  ￼  ￼\n- The algorithm periodically recomputes the static set and restructures pages. What is the measured overhead of this reorganization?   ￼\n- In some scenarios, PRKV matches or even beats full attention. What is the reason for this?  ￼\n- The HND layout speeds up head-wise indexing, and the batched-transfer path reduces kernel launches. Is there any restriction to apply this layout? ￼"
+      },
+      "flag_for_ethics_review": {
+        "value": [
+          "No ethics review needed."
+        ]
+      },
+      "details_of_ethics_concerns": {
+        "value": "Thank you for the submission. I like the paper overall, the hybrid selection insight is compelling, and the system side is thoughtfully engineered.  However, several descriptions are still vague or underspecified. Clarifications that would strengthen the paper:\n- The authors show higher recall with a hybrid split and reuse and local window. Could you provide principled guidance for choosing S and the local window size across different models/tasks? Extra sensitivity curves beyond the current S-only ablation will be appreciated to better estimate the impact of the proposed method.  ￼  ￼\n- The algorithm periodically recomputes the static set and restructures pages. What is the measured overhead of this reorganization?   ￼\n- In some scenarios, PRKV matches or even beats full attention. What is the reason for this?  ￼\n- The HND layout speeds up head-wise indexing, and the batched-transfer path reduces kernel launches. Is there any restriction to apply this layout? ￼"
+      },
+      "rating": {
+        "value": 6
+      },
+      "confidence": {
+        "value": 4
+      },
+      "code_of_conduct": {
+        "value": "Yes"
+      }
+    },
+    "id": "Sxljjy3Mba",
+    "forum": "7FM0GBFhe5",
+    "replyto": "7FM0GBFhe5",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission3974/Reviewer_g8ut"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission3974/Reviewer_g8ut"
+    ],
+    "number": 3,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission3974/-/Official_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1761978417486,
+    "cdate": 1761978417486,
+    "tmdate": 1762917119859,
+    "mdate": 1762917119859,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission3974 by Reviewer g8ut",
+    "display_title": "Response to Reviewer g8ut (Question 1/4)",
+    "content": {
+      "title": {
+        "value": "Response to Reviewer g8ut (Question 1/4)"
+      },
+      "comment": {
+        "value": "Thank you for the supportive comments and recognizing the novelty of our method. We hope our detailed clarifications  will address the concerns regarding our work.\n\n**Q1-1: Provide principled guidance for choosing S across different models/tasks**\n\nReuse of previous topk tokens provides a fine-grained selection mechanism;however, simply reusing the topk tokens (together with local tokens) does not necessarily guarantee a high recall rate, because adjacent tokens may exhibit substantial variation in their topk attention sets. Therefore, the choice of $\\mathcal{S}$ should strike a balance that maximizes the likelihood of overlap between important tokens. Based on this intuition, we design an online algorithm for determining $\\mathcal{S}$.\n\nIn the prefill phase, after computing the observation-window attention scores, $S$ (corresponding to line 7 of Algorithm 1), Let $ S^{(1)} $  and $S^{(T)}$ denote the attention score vectors of the first and last query tokens in the prefilling phase observe window, respectively. For each head h, we compute the overlap of their topk key indices using \n\n$$\nC_{h}= \\left|  \\text{topk}\\left(S^{(1)}_{h}, k\\right) \\ \\cap\\  \\text{topk}\\left(S^{(T)} _ h, k \\right) \\right|\n$$\n\n\nThe static ratio is then obtained by averaging the overlap across all heads, $P$ denotes the page size.Then the static ratio is used in the subsequent selection process.\n\n$$\n\\mathcal{S}=\\frac{P \\cdot \\left\\lfloor  \\frac{\\mathbb{E} _ {h} \\left[C_{h}\\right]} {P}  \\right\\rfloor}{k}\n$$\n\n\nBased on this principle, we evaluate the proposed strategy $\\mathcal{S}$ using Qwen2.5-14B-Instruct and Llama3.1-8B-Instruct on the LongBench dataset across various KV budgets and input length.\n\n| KV Budget | Qwen (32K) | Qwen (64K) | Qwen (128K) | Llama (32K) | Llama (64K) | Llama (128K) |\n| :--- | :---: | :---: | :---: | :---: | :---: | :---: |\n| *k=512* | 0.25 | 0.25 | 0.25 | 0.625 | 0.5625 | 0.5 |\n| *k=1024* | 0.4062 | 0.375 | 0.3438 | 0.6875 | 0.625 | 0.5625 |\n| *k=2048* | 0.5 | 0.4844 | 0.4219 | 0.7344 | 0.7031 | 0.625 |\n| *k=4096* | 0.6016 | 0.5781 | 0.5 | 0.7891 | 0.75 | 0.6875 |\n\nDetail can be found in **Appendix G, Page 24**\n\n**Principled guidance for choosing the local window size.**\n \nThe motivation for retaining a local attention window is that nearby tokens consistently exhibit high attention weights, and therefore should always participate in the attention computation. The local window size is set as an integer multiple\nof the page size, and its optimal value may vary depending on the task. In our experiments, we follow the same local window configuration as used in Arkvale, ensuring a consistent and comparable setup."
+      }
+    },
+    "id": "sDW4jm42Bs",
+    "forum": "7FM0GBFhe5",
+    "replyto": "Sxljjy3Mba",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission3974/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission3974/Authors"
+    ],
+    "number": 2,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission3974/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1763884407622,
+    "cdate": 1763884407622,
+    "tmdate": 1764232769475,
+    "mdate": 1764232769475,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission3974 by Reviewer g8ut",
+    "display_title": "Response to Reviewer g8ut (Question 2/4)",
+    "content": {
+      "title": {
+        "value": "Response to Reviewer g8ut (Question 2/4)"
+      },
+      "comment": {
+        "value": "**Q2: The measured overhead of recomputes the static set and restructures pages**\n\nAfter recomputing the static set and restructuring the pages, two operations are required. First, the page representations must be updated because the page organization has changed. Second, an asynchronous rewrite is issued to synchronize the restructured KV cache back to the CPU-side KV cache pool, ensuring data consistency.  The work flow in **Figure 22, page 25**. Below reports normal layer latency and layer latency with 2R, across different batch sizes, evaluated on both Llama3.1-8B-Instruct and Qwen2.5-14B-Instruct, and measured in both the prefill and decode phases. \n\n$$\n\\\\begin{array}{l|ccc|ccc}\n\\\\textbf{Model / BS} & \\\\textbf{Prefill(ms)} & \\\\textbf{Prefill w/ 2R(ms)} & \\\\textbf{2R Cost(ms)} & \\\\textbf{Decode(ms)} & \\\\textbf{Decode w/ 2R(ms)} & \\\\textbf{2R Cost(ms)} \\\\\\\\\n\\\\hline\n\\\\textbf{Llama-3.1-8B-Ins} & & & & & & \\\\\\\\\nBS=1 & 265 & 301 & 36 & 1.25 & 1.91 & 0.66 \\\\\\\\\nBS=2 & 544 & 587 & 43 & 1.40 & 2.10 & 0.70 \\\\\\\\\nBS=4 & 1103 & 1146 & 43 & 2.03 & 2.78 & 0.75 \\\\\\\\\n\\\\hline\n\\\\textbf{Qwen-2.5-14B-Ins} & & & & & & \\\\\\\\\nBS=1 & 325 & 366 & 41 & 1.27 & 2.00 & 0.73 \\\\\\\\\nBS=2 & 642 & 694 & 52 & 1.50 & 2.25 & 0.75 \\\\\\\\\nBS=4 & 1289 & 1347 & 58 & 1.98 & 2.77 & 0.79 \\\\\\\\\n\\\\end{array}\n$$\n\nThe $2R \\ Cost$ denotes the overhead incurred by recomputing the static set and restructuring pages. In the prefill stage, this overhead is approximately 40 ms ($8\\%$), imposing a negligible impact on the Time to First Token (TTFT). In the decoding stage, although the overhead is around 0.7 ms ($50\\%$), our periodic update strategy allows this cost to be amortized over the interval $T$. For example, the $T=128$ results in a $0.3\\%$ overhead in each decode step.\n\nFurthermore, the low latency achieved by our system optimizations effectively masks this overhead. Consequently, we still effectively reduce the end-to-end latency.\n\nDetail can be found in $ \\color{red}{\\text{Appendix H, Page 24-25}}$"
+      }
+    },
+    "id": "014oiqVXZd",
+    "forum": "7FM0GBFhe5",
+    "replyto": "Sxljjy3Mba",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission3974/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission3974/Authors"
+    ],
+    "number": 4,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission3974/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1763897751731,
+    "cdate": 1763897751731,
+    "tmdate": 1763897751731,
+    "mdate": 1763897751731,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission3974 by Reviewer g8ut",
+    "display_title": "Response to Reviewer g8ut (Question 3/4)",
+    "content": {
+      "title": {
+        "value": "Response to Reviewer g8ut (Question 3/4)"
+      },
+      "comment": {
+        "value": "**Q3: In some scenarios, PRKV matches or even beats full attention.  What is the reason for this?**\n\nThat is an interesting question. We believe the phenomenon is related to the small model size of  Qwen2.5 model. In Figure 6(b) and Figure 6(d), which report results of Qwen2.5-14B-Instruct on LongBench V2 and NIAH, some methods—such as PRKV and ShadowKV—even outperform the full-cache baseline. We hypothesize that this behavior arises from **overlapping or redundant information in the KV cache**, which allows selective sparse attention to occasionally filter out irrelevant or noisy tokens, leading to slightly better task performance. Similar observations have also been reported in other works when using Qwen2.5-7B-Instruct or Qwen2.5-14B-Instruct as test model in ChunkKV[1], FreeKV[2]  and Less Is More[3].\n\n[1] ChunkKV: Semantic-Preserving KV Cache Compression for Efficient Long-Context LLM Inference]\n\n[2] FreeKV: Boosting KV Cache Retrieval for Efficient LLM Inference\n\n[3] Less Is More: Training-Free Sparse Attention with Global Locality for Efficient Reasoning"
+      }
+    },
+    "id": "gWiYNbNNpG",
+    "forum": "7FM0GBFhe5",
+    "replyto": "Sxljjy3Mba",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission3974/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission3974/Authors"
+    ],
+    "number": 5,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission3974/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1763898040476,
+    "cdate": 1763898040476,
+    "tmdate": 1763898139114,
+    "mdate": 1763898139114,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission3974 by Reviewer g8ut",
+    "display_title": "Response to Reviewer g8ut (Question 4/4)",
+    "content": {
+      "title": {
+        "value": "Response to Reviewer g8ut (Question 4/4)"
+      },
+      "comment": {
+        "value": "**Q4: Is there any restriction to apply this HND layout?**\n\nTo summarize, there is no restriction on using the HND layout in CPU memory for storing the KV cache. Our Contiguous Memory Indexing leverages the HND layout on the CPU side to optimize sparse KV retrieval, and this design can be integrated into existing inference frameworks with minimal modification. On the GPU side, the page-level fill-in mechanism in our framework is independent of the attention backend(FlashInfer, FlashAttention, etc.) and supports both NHD and HND layouts."
+      }
+    },
+    "id": "Rq4YF4Gffm",
+    "forum": "7FM0GBFhe5",
+    "replyto": "Sxljjy3Mba",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission3974/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission3974/Authors"
+    ],
+    "number": 6,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission3974/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1763898308643,
+    "cdate": 1763898308643,
+    "tmdate": 1763898308643,
+    "mdate": 1763898308643,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to Official Review of Submission3974 by Reviewer g8ut",
+    "display_title": "Official Comment by Authors",
+    "content": {
+      "comment": {
+        "value": "Dear Reviewer,\n\nI hope this message finds you well. As the discussion period is nearing its end with less than three days remaining, I wanted to ensure we have addressed all your concerns satisfactorily. If there are any additional points or feedback you'd like us to consider, please let us know. Your insights are invaluable to us, and we’re eager to address any remaining issues to improve our work.\n\nThank you for your time and effort in reviewing our paper."
+      }
+    },
+    "id": "zLZLIo0hPi",
+    "forum": "7FM0GBFhe5",
+    "replyto": "Sxljjy3Mba",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission3974/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission3974/Authors"
+    ],
+    "number": 14,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission3974/-/Official_Comment",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764225748051,
+    "cdate": 1764225748051,
+    "tmdate": 1770918061424,
+    "mdate": 1770918061424,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to PRKV:Page Restruct KV Cache for High Accuracy and  Efficiency LLM Generation",
+    "display_title": "Summary of  Discussion for the Area Chair",
+    "content": {
+      "title": {
+        "value": "Summary of  Discussion for the Area Chair"
+      },
+      "comment": {
+        "value": "We sincerely thank all reviewers for their careful reviews. I write this summary comment to provide the AC with the necessary information regarding the discussion phase.\n\nI have responded thoroughly to each reviewer’s questions. Their follow-up responses and updated scores are summarized below:\n\n- **Reviewer 1 (g8ut):** did not provide a timely reply before.\n- **Reviewer 2 (k1cZ):** replied that \"I now understands the use of the HND layout for the KV cache, and I will adjust my score accordingly \" and he adjusted his score. He also raised additional questions regarding whether the static set refresh lies on the *critical path* of decoding and the possibility of asynchronous static token selection. We provided timely and detailed responses to address  these concerns.\n- **Reviewer 3 (Vcit):** replied that “the rebuttal has addressed most of my concerns and decided to keep his score.” \n\n**What we added during the discussion**\n\n- Provide principled guidance for choosing S across different models/tasks, Detail can be found in Appendix G, Page 24.\n\n- Provide measured overhead of recomputes the static set and restructures pages. Detail can be found in Appendix H, Page 24-25\n- Evalution for larger size model: we provide an additional evaluation on Qwen2.5-32B-Instruct using two A100 GPUs.Detail can be found in Appendix J, Page 26-27\n- Provide how the HND and NHD layout efficiently supports GPU attention kernel. .Detail can be found in Appendix I\n\n**Clarifications**\n\n- Algorithmic Contribution: We are the first to quantitatively analyze the impact of static token reuse and page-level Top-K selection on the Attention Recall Rate. And  we design an online algorithm for determining $\\mathcal{S}$ with low overhead.Furthermore, we introduce a Static Token Selection Algorithm, and for the periodic update of static tokens, we provide a detailed design for recomputing the static set and restructuring pages.\n- Apply HND KV layout in CPU side:   there is no restriction on using the HND layout in CPU memory for storing the KV cache. Our Contiguous Memory Indexing leverages the HND layout on the CPU side to optimize sparse KV retrieval, and this design can be integrated into existing inference frameworks with minimal modification. On the GPU side, the page-level fill-in mechanism in our framework is independent of the attention backend(FlashInfer, FlashAttention, etc.) and supports both NHD and HND layouts.\n\nPRKV introduces a unified algorithm–system framework for efficient page-level KV retrieval under KV offloading. Algorithmically, it leverages a hybrid KV selection strategy that combines static KV reuse and dynamic KV retrieval to maintain high attention recall with low overhead. System-wise, PRKV  incorporates asynchronous KV reconstruction, contiguous memory indexing and batched KV transfer to  reduce latency.  \n\nWe respectfully ask the Area Chair to take the reviewers’ score updates submitted during the discussion into account and to evaluate our work and responses carefully."
+      }
+    },
+    "id": "Hv0wkxvDaJ",
+    "forum": "7FM0GBFhe5",
+    "replyto": "7FM0GBFhe5",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission3974/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission3974/Authors"
+    ],
+    "number": 20,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission3974/-/Official_Comment",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764503081627,
+    "cdate": 1764503081627,
+    "tmdate": 1770918060987,
+    "mdate": 1770918060987,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to PRKV:Page Restruct KV Cache for High Accuracy and  Efficiency LLM Generation",
+    "display_title": "Meta Review of Submission3974 by Area Chair 1D4A",
+    "content": {
+      "summary": {
+        "value": "The paper proposes PRKV, a framework optimizing KV cache for long-context LLMs via a hybrid selection strategy (static tokens + dynamic pages) and system-level optimizations (CPU-side HND layout, batched transfers). Reviewers g8ut and Vcit were positive, citing effective system design and solid speedups. Reviewer k1cZ initially rejected (score 2) due to misconceptions about the layout and novelty concerns. Following the rebuttal, k1cZ acknowledged the layout clarification and agreed to raise their score, though they maintained that the algorithmic contribution is incremental."
+      },
+      "reviewer_concerns": {
+        "value": "Addressed:\n- System Overhead: Authors provided data showing the periodic reconstruction overhead is negligible (approx. 0.7ms).\n- HND Layout: Clarified that the HND layout is used for CPU-side indexing to speed up retrieval, while the GPU side remains compatible with standard kernels (e.g., FlashInfer).\n- Experimental Setup: Clarified the LongBench truncation protocol and provided additional results for larger models (Qwen2.5-32B).\nHyperparameters: Provided a heuristic for selecting the static ratio S.\n\nOutstanding:\n- Algorithmic Novelty (k1cZ): The reviewer views the periodic static token update as an incremental variation of existing methods.\n- Critical Path Necessity (k1cZ): The reviewer questioned if the rigorous optimization is necessary if the static set is only refreshed every 128 steps (suggesting it could be done asynchronously off the critical path)."
+      },
+      "reviewer_scores": {
+        "value": "Reviewer g8ut: 6 -> 6\nReviewer Vcit: 6 -> 6\nReviewer k1cZ: 2 -> 4"
+      }
+    },
+    "id": "Hcfwmakt0k",
+    "forum": "7FM0GBFhe5",
+    "replyto": "7FM0GBFhe5",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission3974/Area_Chair_1D4A"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission3974/Senior_Area_Chairs",
+      "ICLR.cc/2026/Conference/Submission3974/Area_Chair_1D4A"
+    ],
+    "number": 1,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission3974/-/Meta_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1767776881340,
+    "cdate": 1767776881340,
+    "tmdate": 1770618947997,
+    "mdate": 1770618947997,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Meta_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "replying_to": "Replying to PRKV:Page Restruct KV Cache for High Accuracy and  Efficiency LLM Generation",
+    "display_title": "Paper Decision",
+    "content": {
+      "title": {
+        "value": "Paper Decision"
+      },
+      "decision": {
+        "value": "Reject"
+      },
+      "comment": {
+        "value": ""
+      }
+    },
+    "id": "dXRy0dnCF5",
+    "forum": "7FM0GBFhe5",
+    "replyto": "7FM0GBFhe5",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Program_Chairs"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Program_Chairs"
+    ],
+    "number": 1,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission3974/-/Decision",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1769416574593,
+    "cdate": 1769416574593,
+    "tmdate": 1770353581221,
+    "mdate": 1770353581221,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Decision",
+    "license": "CC BY 4.0",
+    "version": 2
+  }
+]

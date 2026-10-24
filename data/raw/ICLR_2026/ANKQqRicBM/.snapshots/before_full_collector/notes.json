@@ -1,0 +1,604 @@
+[
+  {
+    "content": {
+      "summary": {
+        "value": "This paper introduces DiffMoE, a novel Mixture-of-Experts (MoE) architecture designed for diffusion transformers. By leveraging a batch-level global token pool, a capacity predictor, and a dynamic threshold, DiffMoE enables efficient token selection and adaptive computation across varying noise levels and conditions. It achieves state-of-the-art performance in both class-conditional and text-to-image generation tasks, surpassing dense models with fewer activated parameters. DiffMoE demonstrates superior scaling efficiency and broader applicability, addressing limitations in prior MoE-based diffusion models."
+      },
+      "soundness": {
+        "value": 3
+      },
+      "presentation": {
+        "value": 3
+      },
+      "contribution": {
+        "value": 3
+      },
+      "strengths": {
+        "value": "+ The proposed DiffMoE is useful for  building scalebale diffusion model.\n+ The proposed dynamic computation is interesting and reasonable"
+      },
+      "weaknesses": {
+        "value": "- The proposed method, DiffMoE, should be clearly highlighted in each table to enhance readability.\n\n- Since the key advantage of MoE lies in its scalability, it would be beneficial to train models of varying sizes to further explore this aspect.\n\n- Lack of a comprehensive literature review. For example, the use of MoE for diffusion transformers [1] and diffusion models with dynamic computation [2] should be discussed in the related work section.\n\n\n\n[1] Diff-MoE: Diffusion Transformer with Time-Aware and Space-Adaptive Experts, ICML 2025.\n\n[2] Dynamic diffusion transformer, ICLR 2025"
+      },
+      "questions": {
+        "value": "see weakness"
+      },
+      "flag_for_ethics_review": {
+        "value": [
+          "No ethics review needed."
+        ]
+      },
+      "rating": {
+        "value": 6
+      },
+      "confidence": {
+        "value": 5
+      },
+      "code_of_conduct": {
+        "value": "Yes"
+      }
+    },
+    "id": "0ccNMbPkMC",
+    "forum": "ANKQqRicBM",
+    "replyto": "ANKQqRicBM",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18370/Reviewer_YtiD"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18370/Reviewer_YtiD"
+    ],
+    "number": 3,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18370/-/Official_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1761842203333,
+    "cdate": 1761842203333,
+    "tmdate": 1762928076808,
+    "mdate": 1762928076808,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "comment": {
+        "value": "**Q2: About generalization of capacity predictor**\n\n> Q2:How well does the capacity predictor generalize across different datasets or tasks? Does it require retraining for each new domain?\n\n**[Reply]** \n\nThank you for the insightful question.\n\nIf we shift the model to a **fundamentally different task**, such as text-to-depth (modality change) or text-to-video (temporal consistency learning), **retraining is required**. This is because the capacity predictor is an integral component of the model, and it must be fine-tuned to adapt to the new task-specific routing patterns.\n\nHowever, if the **task remains the same**—for example, staying within text-to-image but switching to a different dataset—**retraining is not necessary**. The capacity predictor generalizes robustly across datasets within the same task domain.\n\n- **Reason:** It learns the underlying principles of token routing during initial training on large, diverse datasets, rather than memorizing dataset-specific content.\n- **Evidence:** This enables strong zero-shot transfer to novel prompts and unseen concepts, leveraging the inherent generalization ability of the base diffusion model.\n\n\n\n**W2/Q3: About high-resolution tasks and scalability**\n\n> W2:In addition, the batch-level global token pool may pose scalability challenges when extending to high-resolution images or video generation.\n>\n> Q3:How does DiffMoE perform on high-resolution tasks, and are there any scalability limitations?\n\n**[Reply]** \n\n### **1. Scalability on High-Resolution Image Generation**\n\nThank you for the insightful comments. To evaluate whether the batch-level global token pool limits scalability, we conducted additional experiments on ImageNet at high resolution using **8 GPUs** with a **local batch size (token-pool size) of only 8**. This setup intentionally stresses the token-pool design under constrained batch conditions.\n\nAs shown below, **DiffMoE continues to outperform the dense baseline**, even when the global pool is smaller:\n\n| Model (3000K) | Active Params (M) | FID50K↓ (CFG=1.5) |\n| ------------- | ----------------- | ----------------- |\n| Dense-L       | 458M              | 5.8               |\n| DiffMoE-L     | 458M              | **4.0**           |\n\nThese results indicate that **DiffMoE scales well to high-resolution image generation** and does not exhibit noticeable degradation due to limited batch size or reduced pool diversity.\n\n------\n\n### **2. Toward Video Generation & Ultra-High-Resolution Models**\n\nFor video or ultra-high-resolution generation, the effective batch size per GPU may become even smaller, potentially reducing the diversity of tokens in the global pool. We discuss three scalable implementations that ensure efficient routing under such conditions:\n\n------\n\n#### **(1) Full Synchronization (Accurate but Expensive)**\n\nAll gating scores **[B, S, E]** are gathered across GPUs to construct a true global token pool. A global top-k is computed and redistributed back to each rank.  ( *B: local batch size, S: sequence length, E: number of experts* )\n\n- **Pros:** Routing is exact.\n- **Cons:** Communication overhead grows with resolution and number of experts.\n\n------\n\n#### **(2) Group-Wise Pooling (Intra-Node Approximation)**\n\nGPUs within the same node form a local group to build a shared token pool using high-bandwidth intra-node communication.\n\n- **Pros:** Much lower communication cost; still preserves cross-sample diversity.\n- **Cons:** Slight approximation to the true global distribution, but sufficient with a large enough pool.\n\n------\n\n#### **(3) Quantile-Based Approximation (Highly Efficient)**\n\nInstead of syncing full gating scores,  each GPU computes local K-quantiles of gating scores. These quantiles ($N_{Node}\\times N_{GPUs\\ per\\ Node}$, which are much fewer in number than raw token scores) can be aggregated across GPUs with minimal communication.  These small quantile tensors are aggregated globally and averaged to estimate a **global routing threshold**.\n\n- **Pros:** Communication cost becomes **nearly constant**, independent of sequence length.\n- **Cons:** Approximate threshold, but works well in practice for robust routing.\n\n------\n\n### **Summary**\n\nThese strategies provide a flexible spectrum from exact synchronization to lightweight approximations. Selecting the appropriate mode allows **DiffMoE to scale effectively to video and ultra-high-resolution generation**, even when the per-GPU batch size is small. We consider this an exciting direction for further exploration in future work."
+      }
+    },
+    "id": "2pbHVHLet6",
+    "forum": "ANKQqRicBM",
+    "replyto": "vybi9Mql3s",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18370/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18370/Authors"
+    ],
+    "number": 6,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18370/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1763604472283,
+    "cdate": 1763604472283,
+    "tmdate": 1763604472283,
+    "mdate": 1763604472283,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "title": {
+        "value": "Paper Decision"
+      },
+      "decision": {
+        "value": "Reject"
+      },
+      "comment": {
+        "value": ""
+      }
+    },
+    "id": "7I8ty4WWlK",
+    "forum": "ANKQqRicBM",
+    "replyto": "ANKQqRicBM",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Program_Chairs"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Program_Chairs"
+    ],
+    "number": 1,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18370/-/Decision",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1769417331891,
+    "cdate": 1769417331891,
+    "tmdate": 1770354163965,
+    "mdate": 1770354163965,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Decision",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "comment": {
+        "value": "Dear Reviewer jjxW,\n\nThank you very much for your prompt response and for confirming that our comments have addressed your concerns. We truly appreciate you maintaining your positive score.\n\nYour thorough review and constructive feedback have been invaluable in improving the quality of our paper.\n\nSincerely,\n\nThe Authors"
+      }
+    },
+    "id": "7Vr3efZFID",
+    "forum": "ANKQqRicBM",
+    "replyto": "AcLzRlNEtg",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18370/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18370/Authors"
+    ],
+    "number": 11,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18370/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764411055298,
+    "cdate": 1764411055298,
+    "tmdate": 1764411083768,
+    "mdate": 1764411083768,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "summary": {
+        "value": "This paper introduces DiffMoE, a novel method for incorporating Mixture of Experts into the training of Diffusion Transformers. The key innovation is the creation of a batch-level global token pool, achieved by flattening all tokens within a batch. This allows experts to be trained simultaneously on a diverse set of tokens from multiple images and at various noise levels. The authors show that DiffMoE achieves significant improvements over dense baselines with fewer activated parameters. The paper presents a promising and well-motivated method for training scalable and efficient MoE-based diffusion models."
+      },
+      "soundness": {
+        "value": 4
+      },
+      "presentation": {
+        "value": 3
+      },
+      "contribution": {
+        "value": 3
+      },
+      "strengths": {
+        "value": "- A key strength is the observation that standard MoE formulations in diffusion models prevent routers from learning from the crucial contrastive patterns that exist across different noise levels and samples. DiffMoE is designed specifically to address this limitation.\n- The paper employs a fair comparison framework, carefully maintaining a fixed computational cost between the proposed method and the baselines, which strengthens the validity of the performance claims.\n- The paper is well-written, clearly articulating a complex architectural change and its motivations.\n- The ablation studies are thorough and effectively demonstrate the contribution of each individual component of the DiffMoE framework."
+      },
+      "weaknesses": {
+        "value": "- The qualitative results are limited, particularly the visual comparisons against the text-to-image (T2I) baselines. More examples would help in visually assessing the performance gains.\n- There is a limited ablation study on the effect of batch size. Given that the core mechanism relies on a \"batch-level global token pool,\" batch size appears to be a critical factor that could significantly impact DiffMoE's performance."
+      },
+      "questions": {
+        "value": "- The central premise of DiffMoE's effectiveness is that the flattened batch of tokens provides a rich, global distribution for the experts to learn from. However, in many realistic inference or fine-tuning scenarios, users are constrained to very small batch sizes (e.g., 1-4). In such a situation, the flattened \"global\" pool would be a poor approximation of the true training distribution. What the computational cost and performance of DiffMoE are versus the dense baselines in this practical, low-batch-size setting?"
+      },
+      "flag_for_ethics_review": {
+        "value": [
+          "No ethics review needed."
+        ]
+      },
+      "rating": {
+        "value": 6
+      },
+      "confidence": {
+        "value": 3
+      },
+      "code_of_conduct": {
+        "value": "Yes"
+      }
+    },
+    "id": "AcLzRlNEtg",
+    "forum": "ANKQqRicBM",
+    "replyto": "ANKQqRicBM",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18370/Reviewer_jjxW"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18370/Reviewer_jjxW"
+    ],
+    "number": 1,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18370/-/Official_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1761688675989,
+    "cdate": 1761688675989,
+    "tmdate": 1762928077583,
+    "mdate": 1762928077583,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "comment": {
+        "value": "Dear Reviewer YtiD,\n\nThank you very much for your thoughtful feedback and the strong support for our paper. We are delighted to hear that your concerns have been well addressed.\n\nWe sincerely appreciate your suggestion regarding the use of colors. **We have revised paper to reduce color use.** To ensure clear distinction without being overly flashy, we now emphasize the **best results in bold** and the **second-best results with an underline.**\n\nThank you once again for your constructive comments and positive recommendation.\n\nSincerely,\n\nThe Authors"
+      }
+    },
+    "id": "FZAGklCKxu",
+    "forum": "ANKQqRicBM",
+    "replyto": "0ccNMbPkMC",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18370/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18370/Authors"
+    ],
+    "number": 10,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18370/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764410985295,
+    "cdate": 1764410985295,
+    "tmdate": 1764411130543,
+    "mdate": 1764411130543,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "comment": {
+        "value": "Dear Area Chair and Reviewers,\n\nWe sincerely appreciate the time and effort you have dedicated to reviewing our manuscript.\n\nWe introduce **DiffMoE**, a novel Mixture-of-Experts (MoE) architecture that enables efficient and adaptive computation in Diffusion Transformers (DiTs) by using a **Batch-Level Global Token Pool**,  a **Capacity Predictor** and **Dynamic Threshold** technique. As the reviewers highlighted, the paper presents a promising and well-motivated method (jjxW), introduces useful, interesting, and reasonable design choices (YtiD), employs a fair comparison framework (jjxW), and is supported by strong empirical results demonstrating state-of-the-art performance with significantly fewer activated parameters (all).\n\nWe greatly appreciate your constructive feedback. In response, we have carefully revised and enhanced the manuscript by providing extensive additional analysis and experiments:\n\n- **In-depth Analysis of Expert Specialization** (Appendix B.2, Response to bR6L): We provided a comprehensive analysis, identifying systematic expert specialization patterns (e.g., *Bookends, Mid-Peak, Anchor*) enabled by the Global Token Pool.\n- **Robustness and Scalability Studies** (Response to jjxW, bR6L): We demonstrated DiffMoE's robustness under small-batch training/inference and discussed its scalability to high-resolution and video generation tasks.\n- **Expanded Qualitative and Quantitative Comparisons**: We added more visual comparisons (Fig. 13, Response to jjxW) for Text-to-Image generation and provided additional quantitative results (Response to YtiD) across various model scales.\n- **Enhanced Presentation:** Following Reviewer YtiD's suggestion, we have **revised all tables to reduce excessive coloring**. We now use a clear formatting scheme (**Bold** for best, **Underline** for second-best) for emphasis.\n- **Expanded Related Work:** (Response to YtiD) We have clarified the relationship between DiffMoE and orthogonal dynamic diffusion models (*DyDiT*) and other MoE approaches (*Diff-MoE*).\n\nIn the revised manuscript, these updates are temporarily highlighted in **blue** for your convenience.\n\nWe sincerely hope these updates help better convey the benefits of the proposed DiffMoE to the ICLR community. We look forward to further discussion.\n\nThank you very much,\n\nAuthors."
+      },
+      "title": {
+        "value": "Subject: General Response to Area Chair and Reviewers: Summary of Revisions and Additional Experiments"
+      }
+    },
+    "id": "JvIQH5RRM6",
+    "forum": "ANKQqRicBM",
+    "replyto": "ANKQqRicBM",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18370/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18370/Authors"
+    ],
+    "number": 12,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18370/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764412293144,
+    "cdate": 1764412293144,
+    "tmdate": 1764412350603,
+    "mdate": 1764412350603,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "comment": {
+        "value": "Thank you for your reply!\n\nYour comments address my concerns. I thus leave my positive score unchanged."
+      }
+    },
+    "id": "KvY0JjWXlm",
+    "forum": "ANKQqRicBM",
+    "replyto": "r4QxJ8RFlr",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18370/Reviewer_jjxW"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18370/Reviewer_jjxW"
+    ],
+    "number": 9,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18370/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764322980261,
+    "cdate": 1764322980261,
+    "tmdate": 1764322980261,
+    "mdate": 1764322980261,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "summary": {
+        "value": "This submission presents a method for scalable and efficient MoE-based diffusion models. The key finding in this work is that access to the global token distribution can help to apply MoE to diffusion models. A model can learn and dynamically process the tokens from different noise levels and conditions. This allows experts to be trained simultaneously on a diverse set of tokens from multiple images and at various noise levels. To optimize token selection during inference, the submission proposes a capacity predictor that dynamically adjusts resource allocation (efficiently distributing computational resources between complex and simple cases).\n\nThe work demonstrates that DiffMoE improves over dense baselines with fewer activated parameters (3x) and slightly outperforms existing MoE approaches for diffusion models. The submission is a step forward in solving the problem that existing attempts to integrate MoE with diffusion models have yielded suboptimal results, namely failing to achieve the remarkable improvements observed in language models.\n\nI would expect the reviewers to point out that this paper introduces related work at the beginning of Sections 2 and 4. This is an obvious redundancy. These two subsections on diffusion models and the MoE should be merged into one Section 2: \"Related Work and Bacground\". The gained space should be used to add experiments suggested by reviewers, especially from the reviewer bR6L. Overall, the paper should be extended to 10 pages. I am really disappointed with this part of this paper. What is the 3rd key dimension at the beginning of Section 3? At the end of section 3.2, it should be MoE and not moe. For the \"Results are shown\" an incorrect reference is used and no Table is shown.  The results in Table 3 for the T2I COCO dataset are not indicating a \"remarkable improvements\" for MoE with diffusion models (as compared to EC-DiT). The difference between Dense-DiT and EC-DiT is significantly larger (e.g., FID10k drop by 1.58) than the difference between EC-DiT and DiffMoE, which is only 0.33.  \n\nThis paper received only 3 reviews. I would like to have more input from the reviewers (at least one more review) and an answer from the reviewer bR6L to the author's rebuttal. I agree with the reviewer bR6L comments and, for example, would like to see a clear demonstration of how DiffMoE method generalizes between different tasks and datasets. One of the experiments that the authors should add is to quantify (clearly demonstrate experimentally) how the capacity predictor generalizes robustly across datasets within the same task domain. \n\nWhile I appreciate the authors' efforts in addressing an important problem, I regret that I cannot recommend acceptance of this paper in its current form. The primary concern is that the experimental evidence does not sufficiently demonstrate that the proposed method offers substantial improvements over the baselines like the EC-DiT approach. Additionally, the paper would benefit considerably from significant revisions to its presentation, organization, and experimental validation. I would like to emphasize that these concerns stem from the paper's current execution rather than the underlying research direction, which I believe is very important. I encourage the authors to address the above issues and consider resubmitting their work after making these improvements. I believe that with the necessary revisions, this research could reach the quality standards expected for publication."
+      },
+      "reviewer_concerns": {
+        "value": "I agree with the reviewer bR6L comments and, for example, would like to see a clear demonstration of how DiffMoE method generalizes between different tasks and datasets. One of the experiments that the authors should add is to quantify (clearly demonstrate experimentally) how the capacity predictor generalizes robustly across datasets within the same task domain. \n\nReviewer YtiD requested training models of varying sizes to further explore the scalability aspect and it was provided.\n\nReviewer jjxW requested the additional ablation studies on the batch sizes that were executed."
+      },
+      "reviewer_scores": {
+        "value": "YtiD: 6\n\nqLWV: Review not provided\n\nbR6L: 4 \n\njjxW: 6"
+      }
+    },
+    "id": "Lqe1OJKD8k",
+    "forum": "ANKQqRicBM",
+    "replyto": "ANKQqRicBM",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18370/Area_Chair_d3op"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18370/Senior_Area_Chairs",
+      "ICLR.cc/2026/Conference/Submission18370/Area_Chair_d3op"
+    ],
+    "number": 1,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18370/-/Meta_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1767458313682,
+    "cdate": 1767458313682,
+    "tmdate": 1770619613521,
+    "mdate": 1770619613521,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Meta_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "comment": {
+        "value": "We sincerely thank the reviewer for the positive comments on our work! We address the questions and clarify the issues accordingly as described below. \n\n> W denotes Weakness, Q denotes Questions.\n\n**W1/Q1: About more in-depth analysis of expert bahavior**\n\n> W1: The paper lacks an in-depth analysis of expert behavior, such as what patterns each expert learns or how tokens are distributed across experts. \n>\n> Q1: Could the authors provide a more in-depth analysis of expert behavior, specifically how the batch-level global token pool contributes to expert specialization and growth?\n\n**[Reply]** \n\nThank you for the insightful question. In our revision, we added a clearer explanation of how expert specialization emerges, focusing on the role of the **batch-level global token pool**. **The batch-level global token pool enhances cross-sample token interaction and drives clearer, more stable expert specialization during training.**\n\nThe batch-level token pool works by **collecting all tokens from every sample in the batch** and performing routing on this global set instead of per-sample. This design allows tokens from different timesteps and prompt (class) conditions, which naturally encourages experts to specialize. For example, some experts become more aligned with early noisy timesteps, while others specialize in semantic or fine-detail regions.\n\n### **1. Expert Specialization Analysis**\n\nOur core finding is that expert specialization in DiffMoE is not random but follows a **systematic depth-dependent progression**. This specialization is directly enabled by the global token pool, which provides each expert with a diverse and representative sample of the current batch's computational demands, allowing them to learn distinct temporal roles.\n\nThe visualization of expert capacity utilization across timesteps and layers `(Appendix Figure 9 in our paper)` reveals this evolutionary trajectory:\n\n*   **Layer 1 (shallow)**: Experts act as dynamic \"generalists,\" exhibiting the **\"Bookends\"** pattern with high capacity utilization during both high-noise (early) and low-noise (late) steps. This indicates their dual role in initial noisy feature parsing and final detail refinement.\n    \n*   **Layer 7 (intermediate)**: Routing becomes more stable and balanced. Experts here predominantly follow the **\"Mid-Peak\"** pattern, concentrating computation on the semantically complex mid-range timesteps\n*   **Layer 13 (deep-mid)** shows smooth, long-range capacity transitions. Experts here handle fewer early-step tokens and focus more on structured representations emerging in middle and later timesteps.\n*   **Layer 19 (deep)**: Deep-layer experts demonstrate highly stable and specialized behavior, primarily as **\"Anchors\"** with consistent engagement. They focus on processing structurally coherent representations during the critical middle-to-late stages, specializing in high-level semantic refinement.\n\nFrom macro-view of all experts, we also observe a consistent global trend: **experts tend to receive more tokens in middle timesteps**, aligning with our Figure 1(b) and findings reported in SD3 [1] regarding the difficulty of mid-range timesteps for velocity prediction.\n\nThese observations confirm that **experts do not operate uniformly but gradually specialize**, enabled by the batch-level global token pool and capacity predictor. By exposing experts to a diverse and globally aggregated set of tokens at each step, the global pool encourages specialization toward different noise levels and semantic complexities.\n\n#### **A Taxonomy of Expert Temporal Specialization**\n\nWe further roughly categorize the observed expert behaviors into five distinct temporal specialization patterns, which are systematically distributed across the network depth:\n\n1.  **The Bookends:** Highly activated at the start and end of the denoising process.\n2.  **The Mid-Peak:** Most active during the middle stages.\n3.  **The Crescendo:** Activity gradually increases over time.\n4.  **The Diminuendo:** Activity gradually decreases over time.\n5.  **The Anchor:** Maintains a consistent level of activity throughout all steps.\n\n`Each sub figures have been tagged by the categories above in revised paper.`\n\n#### **Summary of Expert Behavior by Layer**\n\n| Network Layer | Predominant Routing Pattern(s) | Inferred Specialization |\n| :- | :-| :--|\n| **Layer 1 (Shallow)** | **The Bookends (Primary)**, The Mid-Peak | Low-level, noise-robust feature extraction|\n| **Layer 7 (Mid)** | **The Mid-Peak (Primary)**, The Crescendo, The Diminuendo | Mid-level feature integration and structuring  |\n| **Layer 13 (Deep-Mid)** | **The Mid-Peak (Primary)**, The Crescendo, The Anchor | Refined structural and conceptual representation |\n| **Layer 19 (Deep)** | The Mid-Peak, The Crescendo, **The Anchor (Primary)**| High-level semantic refinement and detail polishing |\n\n---"
+      }
+    },
+    "id": "SomBaUdWIC",
+    "forum": "ANKQqRicBM",
+    "replyto": "n8ZlSR3PLy",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18370/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18370/Authors"
+    ],
+    "number": 4,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18370/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1763604354258,
+    "cdate": 1763604354258,
+    "tmdate": 1763604354258,
+    "mdate": 1763604354258,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "comment": {
+        "value": "We sincerely thank the reviewer for the positive comments on our work! We address the questions and clarify the issues accordingly as described below. \n\n> W denotes Weakness, Q denotes Question.\n\n**W1: About highlighting our method**\n\n> W1: The proposed method, DiffMoE, should be clearly highlighted in each table to enhance readability.\n\n**[Reply]** \n\nThank you for the helpful suggestion. We have revised all tables in the updated version and **clearly highlighted our method (DiffMoE)** to improve readability and make comparisons more intuitive.\n\n\n\n**W2: About varying size of our model**\n\n> W2: Since the key advantage of MoE lies in its scalability, it would be beneficial to train models of varying sizes to further explore this aspect.\n\n**[Reply]**\n\nThank you for your valuable suggestions. As shown in Figure 4 of the submitted paper, we provide DiffMoE models across multiple scales from S to L. Table 2 further illustrates the strong parameter-scaling behavior of DiffMoE: for example, our 458M-active-parameter DiffMoE already surpasses its dense counterpart with 1353M active parameters. **Overall, DiffMoE supports a broad spectrum of active model sizes—33M, 130M, 458M, and 675M—and consistently exhibits strong performance on both C2I and large-scale T2I tasks.** Additional quantitative comparisons are provided in the table below:\n\n| Model Size | Method / 400K / Flow |           |\n| ---------- | -------------------- | --------- |\n| S/33M      | TC-DiT-S-E16         | 56.76     |\n| S/33M      | Dense-DiT-S          | 59.84     |\n| S/33M      | EC-DiT-S-E16         | 57.79     |\n| S/33M      | **DiffMoE-S-E16**    | **54.61** |\n| B/130M     | TC-DiT-B-E16         | 37.96     |\n| B/130M     | Dense-DiT-B          | 36.24     |\n| B/130M     | EC-DiT-B-E16         | 34.64     |\n| B/130M     | **DiffMoE-B-E16**    | **32.89** |\n| L/458M     | TC-DiT-L-E16         | 24.60     |\n| L/458M     | Dense-DiT-L          | 21.16     |\n| L/458M     | EC-DiT-L-E16         | 21.76     |\n| L/458M     | **DiffMoE-L-E16**    | **18.91** |\n| XL/675M    | Dense-DiT-XL         | 18.80     |\n| XL/675M    | **DiffMoE-XL-E16**   | **17.63** |\n\nThe aforementioned results are based on the Flow Matching method. To complement this, we also present a DDPM-trained version contained S, B, L sizes in Appendix Figure 6. The consistent high performance across both training paradigms robustly demonstrates the general effectiveness of our method.\n\n\n\n**W3: More Discussion on the Two Cited Works**\n\n> W3: Lack of a comprehensive literature review. For example, the use of MoE for diffusion transformers [1] and diffusion models with dynamic computation [2] should be discussed in the related work section.\n\n**[Reply]** \n\nThank you for raising this important point. We have expanded the discussion of related work in the revised paper (using blue font). More detailed analysis is shown below:\n\nDiff-MoE [1] proposes a MoE architecture with **time-aware and space-adaptive routing**, which is fundamentally orthogonal to our approach. Their method explicitly adapts expert activation based on diffusion timesteps and spatial context. In contrast, DiffMoE focuses on **global batch-level token routing and capacity prediction**, allowing the model to implicitly learn routing behavior **without introducing additional hand-crafted inductive biases**. These two directions are complementary, and integrating them could potentially lead to a more powerful and flexible MoE-based diffusion model.\n\nDyDiT [2] introduces a dynamic computation mechanism designed primarily to **reduce inference-time cost** for diffusion transformers. This direction is orthogonal to ours: DyDiT focuses on **runtime efficiency**, while DiffMoE targets **architectural design and its scalability** during training and modeling. In other words, DyDiT adapts computation per timestep at inference, whereas DiffMoE restructures the model itself through MoE-based expert routing and capacity allocation. These approaches are complementary, and combining DiffMoE with dynamic-inference techniques such as DyDiT offers a promising avenue for future work.\n\n\n\n*Reference*\n\n*[1] Diff-MoE: Diffusion Transformer with Time-Aware and Space-Adaptive Experts, ICML 2025.*\n\n*[2] Dynamic Diffusion Transformer, ICLR 2025.*"
+      }
+    },
+    "id": "bJgCu6vrw3",
+    "forum": "ANKQqRicBM",
+    "replyto": "0ccNMbPkMC",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18370/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18370/Authors"
+    ],
+    "number": 2,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18370/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1763604011689,
+    "cdate": 1763604011689,
+    "tmdate": 1763604011689,
+    "mdate": 1763604011689,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "summary": {
+        "value": "The paper introduces DiffMoE, a novel Mixture-of-Experts (MoE) architecture that allows experts to access global token distributions via a batch-level global token pool during training, encouraging more specialized expert behavior. It further integrates a capacity predictor and dynamic thresholding mechanism to adaptively allocate computational resources based on input noise and sample complexity. Comprehensive experiments demonstrate the model’s effectiveness."
+      },
+      "soundness": {
+        "value": 3
+      },
+      "presentation": {
+        "value": 2
+      },
+      "contribution": {
+        "value": 2
+      },
+      "strengths": {
+        "value": "The paper introduces a novel batch-level global token pool that effectively captures the heterogeneity of diffusion processes, addressing a key limitation of prior MoE-based diffusion models. The proposed capacity predictor and dynamic thresholding mechanisms enable adaptive computation, balancing quality and efficiency. The evaluation is comprehensive, demonstrating the effectiveness of DiffMoE with significantly fewer active parameters."
+      },
+      "weaknesses": {
+        "value": "The paper lacks an in-depth analysis of expert behavior, such as what patterns each expert learns or how tokens are distributed across experts. In addition, the batch-level global token pool may pose scalability challenges when extending to high-resolution images or video generation."
+      },
+      "questions": {
+        "value": "1. Could the authors provide a more in-depth analysis of expert behavior, specifically how the batch-level global token pool contributes to expert specialization and growth?\n2. How well does the capacity predictor generalize across different datasets or tasks? Does it require retraining for each new domain?\n3. How does DiffMoE perform on high-resolution tasks, and are there any scalability limitations?"
+      },
+      "flag_for_ethics_review": {
+        "value": [
+          "No ethics review needed."
+        ]
+      },
+      "rating": {
+        "value": 4
+      },
+      "confidence": {
+        "value": 3
+      },
+      "code_of_conduct": {
+        "value": "Yes"
+      }
+    },
+    "id": "n8ZlSR3PLy",
+    "forum": "ANKQqRicBM",
+    "replyto": "ANKQqRicBM",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18370/Reviewer_bR6L"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18370/Reviewer_bR6L"
+    ],
+    "number": 2,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18370/-/Official_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1761714159000,
+    "cdate": 1761714159000,
+    "tmdate": 1762928077206,
+    "mdate": 1762928077206,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "comment": {
+        "value": "Thank you for your response. My concerns have been well addressed, and I hope this paper will be accepted to ICLR. \n\nHowever, I suggest avoiding the use of too many different colors in the paper, as it may make it appear overly flashy. I kindly ask the authors to consider this."
+      }
+    },
+    "id": "pIfhUzUN3Z",
+    "forum": "ANKQqRicBM",
+    "replyto": "bJgCu6vrw3",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18370/Reviewer_YtiD"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18370/Reviewer_YtiD"
+    ],
+    "number": 8,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18370/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764322778474,
+    "cdate": 1764322778474,
+    "tmdate": 1764322778474,
+    "mdate": 1764322778474,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "comment": {
+        "value": "We sincerely thank the reviewer for the positive comments on our work! We address the questions and clarify the issues accordingly as described below. \n\n> W denotes Weakness, Q denotes Questions.\n\n\n\n**W1: More visual comparisons against the text-to-image baselines**\n\n> W1: The qualitative results are limited, particularly the visual comparisons against the text-to-image (T2I) baselines. More examples would help in visually assessing the performance gains.\n\n**[Reply]** \n\nThank you for your suggestion. **We have added additional visual comparisons with Dense-DiT, TC-DiT, and EC-DiT in Fig. 13 in updated paper. Across all examples shown, DiffMoE shows consistently stronger text–image alignment and more accurate visual details.** \n\nFor instance, DiffMoE better captures fine-grained attributes such as correct hand–keyboard interactions, the proper shape of the tennis racquet, realistic sheep contours, and clear broccoli–meat in the pot. In compositional prompts (e.g., a bird standing on the back of a cow or a man holding a pillow), DiffMoE maintains accurate spatial relations, whereas baselines often produce misplaced or incomplete objects. The successful generation of images from prompts containing multiple objects (e.g., “bench, lantern, and tankards”) further demonstrates DiffMoE's ability to preserve all required elements. Since all models were trained under identical conditions (dataset, compute budget, and number of activated parameters), this provides a fair comparison. These qualitative results effectively illustrate the advantages of DiffMoE beyond what quantitative metrics and benchmarks can capture.\n\n\n\n**W2/Q1: Ablation study on the effect of batch size**\n\n> W2: There is a limited ablation study on the effect of batch size. Given that the core mechanism relies on a \"batch-level global token pool,\" batch size appears to be a critical factor that could significantly impact DiffMoE's performance.\n>\n> Q1: The central premise of DiffMoE's effectiveness is that the flattened batch of tokens provides a rich, global distribution for the experts to learn from. However, in many realistic inference or fine-tuning scenarios, users are constrained to very small batch sizes (e.g., 1-4). In such a situation, the flattened \"global\" pool would be a poor approximation of the true training distribution. What the computational cost and performance of DiffMoE are versus the dense baselines in this practical, low-batch-size setting?\n\n**[Reply]** \n\n### **1. About the Performance of DiffMoE under Small-Batch Training**\n\nThank you for the insightful question. `DiffMoE remains effective even under small-batch training.` We conducted additional experiments with a **local batch size of 2** per GPU on 2 H800s for 400K steps (average active params: **33M**). Despite the limited batch size, **DiffMoE still benefits from inter-sample token interactions** via the global token pool.\n\nWhen the batch size approaches 1, the global pool naturally degenerates into **expert-choice (intra-sample) routing**, which only contains intra-sample token interaction, thus we choose 2 as the minimal effective batch size.\n\n| Model (400K, Batch Size = 2) | FID50K↓   |\n| ---------------------------- | --------- |\n| TC-DiT                       | 96.21     |\n| Dense-DiT                    | 95.19     |\n| EC-DiT                       | 93.12     |\n| **DiffMoE**                  | **89.77** |\n\nThese results show that **DiffMoE consistently outperforms all baselines**, demonstrating its robustness under low-resource settings. Moreover, **when the per-GPU batch is small**, the global token pool can still be constructed via **cross-GPU communication** to preserve tokens diversity.\n\n---\n\n### **2. About the Performance of DiffMoE trained on Big-Batch but under Small-Batch Inference**\n\nOur capacity predictor and dynamic threshold techniques can solve the critical challenge of batch size mismatch between training and inference, ensuring stable performance. `DiffMoE maintains stable and strong performance across a wide range of batch sizes`, including batch size of 1, due to its accurate and adaptive routing mechanism. We choose our pre-trained model DiffMoE-L-E8-7000K(458M, batch pool size per GPU = 32, macro batch size = 256, 8 GPUs) to conduct the ablation study.\n\n**Key Results**:\n\n| Batch Size | FID50K↓ |\n| ---------- | ------- |\n| `1`        | `2.16`  |\n| 10         | 2.19    |\n| 75         | 2.13    |\n\n**Why It Works? Further analysis for capacity predictor to better domenstrate the high routing qulity**\n\n- The **capacity predictor** is a lightweight binary classifier trained with cross-entropy to select informative tokens.\n- Combined with a dynamic threshold, it achieves **99.53% token selection accuracy** in our experiments, ensuring high-quality routing regardless of batch size."
+      }
+    },
+    "id": "r4QxJ8RFlr",
+    "forum": "ANKQqRicBM",
+    "replyto": "AcLzRlNEtg",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18370/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18370/Authors"
+    ],
+    "number": 3,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18370/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1763604038417,
+    "cdate": 1763604038417,
+    "tmdate": 1763604748409,
+    "mdate": 1763604748409,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "comment": {
+        "value": "### **2. Macro-Computation Allocation Analysis**\n\nIn **Appendix Section B (Dynamic Conditional Computation)**, we extend this analysis to the macro scale. We demonstrate that DiffMoE's specialization mechanism enables **task-adaptive computation allocation**.\n\n**Takeaway:** The global token pool is the cornerstone of this architecture. By providing a global view of the batch's computational needs at each denoising step, it naturally encourages experts to **diversify and specialize** across the noise spectrum and network hierarchy, forming an efficient, adaptive computational network. DiffMoE dynamically adjusts its total expert utilization and routing distribution between C2I (Class-to-Image) and T2I (Text-to-Image) tasks. This shows that the model not only specializes experts internally but also leverages this specialization to reallocate computational resources at a system level based on timesteps and conditions.\n\n*Reference*\n[1] *Scaling Rectified Flow Transformers for High-Resolution Image Synthesis*"
+      }
+    },
+    "id": "vybi9Mql3s",
+    "forum": "ANKQqRicBM",
+    "replyto": "SomBaUdWIC",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18370/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18370/Authors"
+    ],
+    "number": 5,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18370/-/Official_Comment"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1763604452617,
+    "cdate": 1763604452617,
+    "tmdate": 1763604452617,
+    "mdate": 1763604452617,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  }
+]
