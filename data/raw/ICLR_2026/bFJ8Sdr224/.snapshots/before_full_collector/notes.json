@@ -1,0 +1,560 @@
+[
+  {
+    "content": {
+      "summary": {
+        "value": "This paper addresses the autoregressive decoding bottleneck in large language models (LLMs) by focusing on diffusion-based LLMs (dLLMs), which enable parallel token generation via iterative denoising. However, existing parallel decoding strategies rely on fixed heuristics (e.g., confidence thresholds) that fail to adapt to input-specific characteristics, leading to suboptimal speed–quality trade-offs. The authors propose Learn2PD (“Learning to Parallel Decode”): a lightweight filter model trained in a post-training phase (requiring only minutes of GPU time) to predict whether a token’s current prediction matches the final output, thereby approximating an ideal “Extremely Greedy Parallel” (EGP) oracle that unmasks tokens only when predictions are correct—avoiding redundant re-decoding. Additionally, they introduce an End-of-Text Prediction (EoTP) mechanism to detect sequence termination and skip decoding of padding tokens. Evaluated on the LLaDA benchmark (GSM8K, MATH, HumanEval, MBPP), Learn2PD + EoTP achieves 22.58× speedup with no performance loss, and 57.51× with KV-Cache at minimal accuracy cost."
+      },
+      "soundness": {
+        "value": 2
+      },
+      "presentation": {
+        "value": 3
+      },
+      "contribution": {
+        "value": 2
+      },
+      "strengths": {
+        "value": "The method is elegantly simple and highly efficient: the filter model uses a two-layer MLP that takes block-level confidence scores as input and outputs a binary decision (remask or not) via a sigmoid-thresholded logit . Its computational overhead is negligible (<1% of inference time), avoiding complex architectures or task-specific engineering—demonstrating the principle that “simplicity works.” Moreover, the approach is highly reproducible: pseudocode is clearly provided, and inference requires no ground-truth labels, making it well-suited for open-source release and practical deployment."
+      },
+      "weaknesses": {
+        "value": "- **Limited model and architecture coverage**: The method is evaluated exclusively on LLaDA (8B-Instruct) and not tested on other dLLMs such as DiffuLLaMA (Gong et al., 2025) or Dream (Ye et al., 2025), raising concerns about generalizability and model dependency.\n  \n- **Insufficient task and baseline comparisons**: The empirical analysis (e.g., Figure 2) focuses only on subsets like GSM8K and HumanEval, lacking comprehensive evaluation across the full LLaDA benchmark suite. Moreover, comparisons are limited to the official LLaDA baselines, omitting key alternatives such as confidence-threshold-based or slow-fast sampling strategies.\n\n- **Oracle claims and training robustness**: The paper claims EGP achieves 15–20× optimal speedup, yet Figure 4 only reports a median of 2 steps per block without worst-case (lower-bound) analysis. Additionally, while the post-training phase is said to take “minutes,” there is no ablation on hyperparameter sensitivity (e.g., learning rate, threshold) or convergence behavior."
+      },
+      "questions": {
+        "value": "- **Model details**: What are the exact specifications of \\( f_\\theta \\)? Hidden dimension size? Activation function (e.g., ReLU)? Could incorporating confidence signals from more than one block improve performance? Additional experiments would help clarify design choices.\n\n- **Transferability**: How would Learn2PD adapt to non-LLaDA dLLMs like Dream? Does retraining the filter incur prohibitive costs? What is the cross-task generalization gap (e.g., train on GSM8K, test on MATH)?\n\n- **Robustness**: How does the method perform under low-resource settings (e.g., zero-shot) or with adversarial/noisy prompts? Furthermore, the “re-decoding gap” distribution in Figure 2 is based on only 10 samples—what are the mean and standard deviation across the full dataset?"
+      },
+      "flag_for_ethics_review": {
+        "value": [
+          "No ethics review needed."
+        ]
+      },
+      "rating": {
+        "value": 4
+      },
+      "confidence": {
+        "value": 4
+      },
+      "code_of_conduct": {
+        "value": "Yes"
+      }
+    },
+    "id": "0fZBZ6Ni3k",
+    "forum": "bFJ8Sdr224",
+    "replyto": "bFJ8Sdr224",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18792/Reviewer_pSk7"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18792/Reviewer_pSk7"
+    ],
+    "number": 3,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18792/-/Official_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1761833146681,
+    "cdate": 1761833146681,
+    "tmdate": 1762999988140,
+    "mdate": 1762999988140,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "title": {
+        "value": "Response to Reviewer vfNL"
+      },
+      "comment": {
+        "value": "We thank reviewer vfNL for the insightful and valuable comments. We sincerely hope that our rebuttal has addressed your concerns. If there are any remaining issues or points that are unclear, we would be grateful to receive further feedback and will gladly continue to respond and improve the work accordingly.\n\n**1. W1: Using a KV cache during inference can cause a misalignment with the training process, potentially altering the model's generated outputs from the training ground truth.**\n\n**Reply:** We appreciate your insightful comment. We would like to emphasize that KV cache is introduced only to demonstrate that our method can coexist with other acceleration methos, rather than as a core component of Learn2PD. Yes. Using a KV cache during inference can change the distribution of confidence scores, which can affect the model’s accuracy. To address this, we retrain the filter model specifically under KV-cache-enabled settings so that it can effectively handle the distributional shift introduced by the cache and better align with the cached inference behavior. \n\n| Gen Length | Methods      | Speed  | Accuracy    |\n|-----------|--------------|--------|---------|\n| 1024      | LLaDA & Parallel Decoding & Dual Cache (Fast-dllm) [1]      | 19.60×  | 0.747  | \n|           | Learn2PD (original) & EoTP & Dual Cache   | 57.51×  | 0.740   |\n|           | Learn2PD (Dual Cache) & EoTP & Dual Cache   | 60.47× | 0.753 |\n\n[1] Wu, Chengyue, et al. \"Fast-dLLM: Training-free Acceleration of Diffusion LLM by Enabling KV Cache and Parallel Decoding.\" arXiv (2025). https://arxiv.org/abs/2505.22618.\n\n**2. W2: As shown in Table 2, there is a big acc drop with dual cache (5.83). Is this caused by Learn2PD?**\n\n**Reply:** We appreciate this question. The accuracy drop is mainly due to the Dual Cache mechanism itself. As shown in the previous table, the accuracy already decreases significantly when Dual Cache is enabled, even without Learn2PD. Our method only introduces a relatively minor additional drop. To address this, we retrain the filter specifically under the Dual Cache setting to better align with its confidence distribution, which recovers the accuracy from 74.0% to 75.3%.\n\n**3. W3: The evaluation is mainly on LLaDA. How does the method generalize to other models like Dream?**\n\n**Reply:**   We appreciate your helpful comment. We have conducted GSM8K experiments on Dream under generation lengths of 256 and 1024. The results show that Learn2PD achieves 1.70× and 5.84× speedups over the vanilla Dream model at generation lengths 256 and 1024, respectively. Furthermore, EoTP improves the speedup to 10.99× at generation length 1024. These results suggest that both Learn2PD and EoTP are not limited to the LLaDA model and can transfer effectively to causal diffusion dLLMs such as Dream. We have updated the manuscript to include these results in Appendix and highlighted the corresponding entries in red.\n\n| Gen Length | Methods       | TPS  | Speed  | Accuracy    |\n|-----------|--------------|-------|--------|---------|\n| 256       | Dream           | 2.38  | 1.00×  | 0.746  | \n|           | + Learn2PD | 4.04 | 1.70×  | 0.745   | \n|           | Learn2PD & EoTP    | 4.73 | 1.99× | 0.734 |\n| 1024       | Dream          | 0.38 | 1.00×  | 0.719  | \n|           | + Learn2PD  | 2.19 | 5.84×  | 0.721   |\n|           | Learn2PD & EoTP    | 4.12 | **10.99×** | 0.731 |\n\n**4. W4: How much is the inference overhead is the additional predictor?**\n\n**Reply:**  We appreciate this comment. The additional predictor has only 2,112 parameters, which is negligible compared to the billions of parameters in the LLaDA. The inference impact caused by the filter model is minimal. Therefore, our measured results reflect the actual acceleration. We have also provided the code in the supplementary materials.\n\n**5. W5: How does the performance change with respect to the size of the predictor?**\n\n**Reply:**  Thanks for this comment. We analyze the impact of the predictor (filter model) size on performance in Section 4.4. Specifically, we found that a two-layer MLP performs better than a single-layer MLP, whereas increasing the depth to three layers hurts performance likely due to overfitting."
+      }
+    },
+    "id": "5FncAMr7eB",
+    "forum": "bFJ8Sdr224",
+    "replyto": "VBnoumvW7V",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18792/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18792/Authors"
+    ],
+    "number": 6,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18792/-/Official_Comment",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1763969881063,
+    "cdate": 1763969881063,
+    "tmdate": 1770917781957,
+    "mdate": 1770917781957,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "summary": {
+        "value": "This paper proposes Learn2PD, a learnable and lightweight parallel decoding strategy for diffusion-based large language models, complemented by an End-of-Text Prediction mechanism. The core idea is to replace fixed, heuristic-based unmasking rules with a small neural filter that predicts whether a token’s current prediction already matches its final output, enabling adaptive and efficient parallel decoding. The problem is timely and important, as inference efficiency remains a key bottleneck for dLLMs.\n\nReviewers generally agree that the paper is well motivated and addresses a relevant and nontrivial problem in dLLM inference. The proposed method is consistently praised for its simplicity, elegance, and practicality: the filter model is extremely lightweight, easy to train, and introduces negligible inference overhead, yet yields substantial speedups. Experimental results demonstrate impressive acceleration particularly when combined with EoTP and KV-cache–based techniques.\n\nReviewers also raise moderate concerns about soundness, generality, and empirical coverage, which place the paper near the borderline. Most scores cluster around “fair” to “good” for soundness and contribution, with ratings ranging from marginally below to marginally above the acceptance threshold. Detailed concerns are:\n1. Evaluation breadth: While the rebuttal adds Dream results, the overall evaluation still centers heavily on LLaDA, and comparisons to alternative decoding strategies are sometimes indirect (relying on reported numbers rather than re-implementations).\n2. Clarity and presentation: Multiple reviewers found parts of the paper (e.g., Section 3.1.2 and Figures 2 and 4) hard to understand, though these issues were addressed in the revision.\n3. Soundness and analysis depth: Some claims (e.g., oracle EGP speedups) are idealized and lack worst-case or robustness analysis. Hyperparameter sensitivity and robustness to distribution shifts are discussed but not extensively quantified.\n4. Generalization and robustness: While transfer to Dream is now demonstrated, questions remain about cross-task generalization, behavior under noisy or adversarial inputs, and performance in lower-resource settings.\n\nThe authors provided thorough and constructive rebuttals, adding new experiments, clarifying misunderstandings, and improving figures and text. These responses address most of the reviewers’ concerns, particularly around generalization, inference overhead, and clarity. Some broader concerns about evaluation scope and robustness remain partially addressed but are not uncommon for a first introduction of a new decoding framework.\n\nOverall, the submission presents a promising and practically impactful idea for accelerating diffusion LLMs, with a strong simplicity–performance trade-off. While the paper has some limitations in evaluation breadth and analysis depth, the rebuttal alleviates several key concerns. The consensus places the paper on the borderline, and I am slightly leaning towards acceptance if there is space."
+      },
+      "reviewer_concerns": {
+        "value": "see above"
+      },
+      "reviewer_scores": {
+        "value": "see above"
+      }
+    },
+    "id": "HzRyLoXIl2",
+    "forum": "bFJ8Sdr224",
+    "replyto": "bFJ8Sdr224",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18792/Area_Chair_GhZa"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18792/Senior_Area_Chairs",
+      "ICLR.cc/2026/Conference/Submission18792/Area_Chair_GhZa"
+    ],
+    "number": 1,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18792/-/Meta_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1767831135882,
+    "cdate": 1767831135882,
+    "tmdate": 1770619629938,
+    "mdate": 1770619629938,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Meta_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "title": {
+        "value": "Response to Reviewer pSk7 (continue)"
+      },
+      "comment": {
+        "value": "**4.Q1: Model details: What are the exact specifications of ( f_\\theta )? Hidden dimension size? Activation function (e.g., ReLU)? Could incorporating confidence signals from more than one block improve performance? Additional experiments would help clarify design choices.**\n\n**Reply:** Thanks for this insightful comment. In our implementation, f_\\theta is a simple two-layer MLP with ReLU activation, instantiated as a 32-dimensional input mapped to a 32-dimensional hidden layer and then back to 32 dimensions. In the existing model, a semi-autoregressive decoding scheme is adopted to improve accuracy, where decoding is performed at the block level. Our method is built on the same block size of 32, which has been a default choice in prior work. [1] We also compared 1-layer, 2-layer, and 4-layer MLPs and selected the optimal number of layers (2) for our filter model.\n\n[1] Nie, Shen, et al. \"Large Language Diffusion Models.\" arXiv (2025). https://arxiv.org/abs/2502.09992.\n\n**5.Q2: Transferability: How would Learn2PD adapt to non-LLaDA dLLMs like Dream? Does retraining the filter incur prohibitive costs? What is the cross-task generalization gap (e.g., train on GSM8K, test on MATH)?**\n\n**Reply:** We appreciate this helpful comment. We provide the results on Dream in the response of Weakness 1. The training cost of filter model is only several minutes, so it would not incur prohibitive costs. To assess generalization across tasks, the current filter model is trained on FLAN dataset. Thus, a cross-task generalization gap is already reflected in the reported results. And if the filter is trained and tested on more closely matched datasets, its performance would further improve.\n\n**6.Q3: Robustness: How does the method perform under low-resource settings (e.g., zero-shot) or with adversarial/noisy prompts? Furthermore, the “re-decoding gap” distribution in Figure 2 is based on only 10 samples—what are the mean and standard deviation across the full dataset?**\n\n**Reply:** Thank you for this comment. In our current experiments, the filter does not require any task-specific fine-tuning for each benchmark (it is trained on 2640 FLAN samples and evaluated on GSM8K/MATH, etc.), which already reflects the zero-shot performance. For Figure 2, we analyze repetitive decoding steps only to demonstrate the potential for accelerating inference by reducing such redundancy. Therefore, we do not provide a full quantitative analysis of repetitive decoding steps over the entire dataset."
+      }
+    },
+    "id": "KIAqy9qGGj",
+    "forum": "bFJ8Sdr224",
+    "replyto": "0fZBZ6Ni3k",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18792/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18792/Authors"
+    ],
+    "number": 4,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18792/-/Official_Comment",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1763969749918,
+    "cdate": 1763969749918,
+    "tmdate": 1770917780037,
+    "mdate": 1770917780037,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "title": {
+        "value": "Paper Decision"
+      },
+      "decision": {
+        "value": "Accept (Poster)"
+      },
+      "comment": {
+        "value": ""
+      }
+    },
+    "id": "P65gwleMDi",
+    "forum": "bFJ8Sdr224",
+    "replyto": "bFJ8Sdr224",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Program_Chairs"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Program_Chairs"
+    ],
+    "number": 1,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18792/-/Decision",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1769417355901,
+    "cdate": 1769417355901,
+    "tmdate": 1770356179081,
+    "mdate": 1770356179081,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Decision",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "summary": {
+        "value": "The paper proposes Learn2PD, a learnable parallel decoding framework for dLLMs that replaces fixed heuristics with a lightweight filter model that predicts, per token, whether its current prediction already matches the final output. \nThis adaptive filter enables tokens to be “unmasked” dynamically and in parallel, improving the speed–quality tradeoff. They also introduce an EoTP mechanism to detect completion and prevent redundant decoding, and experiments show significant speedups."
+      },
+      "soundness": {
+        "value": 3
+      },
+      "presentation": {
+        "value": 2
+      },
+      "contribution": {
+        "value": 3
+      },
+      "strengths": {
+        "value": "1. The problem this paper tries to address is an important one: current dLLM decoding is mainly heuristic-based. A hyperparameter needs to be used (like confidence) for unmasking. The neural predictor is indeed a plausible solution. \n\n2. The speedup achieved is impressive. \n\n3. The evaluation is qutie solid, including compatibility with KV cache methods."
+      },
+      "weaknesses": {
+        "value": "1. Using a KV cache during inference can cause a misalignment with the training process, potentially altering the model's generated outputs from the training ground truth.\n\n2. As shown in Table 2, there is a big acc drop with dual cache (5.83). Is this caused by Learn2PD? \n\n3. The evaluation is mainly on LLaDA. How does the method generalize to other models like Dream?\n\n4. How much is the inference overhead is the additional predictor? \n\n5. How does the performance change with respect to the size of the predictor?"
+      },
+      "questions": {
+        "value": "Please see the weaknesses above."
+      },
+      "flag_for_ethics_review": {
+        "value": [
+          "No ethics review needed."
+        ]
+      },
+      "rating": {
+        "value": 6
+      },
+      "confidence": {
+        "value": 3
+      },
+      "code_of_conduct": {
+        "value": "Yes"
+      }
+    },
+    "id": "VBnoumvW7V",
+    "forum": "bFJ8Sdr224",
+    "replyto": "bFJ8Sdr224",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18792/Reviewer_vfNL"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18792/Reviewer_vfNL"
+    ],
+    "number": 1,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18792/-/Official_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1760477796409,
+    "cdate": 1760477796409,
+    "tmdate": 1762999988304,
+    "mdate": 1762999988304,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "comment": {
+        "value": "Thank you for the explanation. I will stand by my initial assessment."
+      }
+    },
+    "id": "XfSJoG8wkZ",
+    "forum": "bFJ8Sdr224",
+    "replyto": "ti41YAmOtk",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18792/Reviewer_Y2jx"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18792/Reviewer_Y2jx"
+    ],
+    "number": 7,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18792/-/Official_Comment",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1764223891860,
+    "cdate": 1764223891860,
+    "tmdate": 1770917780179,
+    "mdate": 1770917780179,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "summary": {
+        "value": "This paper proposes Learn2PD, a dynamic re-masking method that enables more efficient generation in diffusion language models. A learnable filter model is employed to achieve substantial acceleration in generation performance."
+      },
+      "soundness": {
+        "value": 2
+      },
+      "presentation": {
+        "value": 3
+      },
+      "contribution": {
+        "value": 3
+      },
+      "strengths": {
+        "value": "1. The paper presents a clear motivation, employing deep learning techniques to design a more principled unmasking mechanism.\n\n2. The proposed Filter model is lightweight and easy to obtain."
+      },
+      "weaknesses": {
+        "value": "1. The main experiments are conducted on the LLaDA model, and the effectiveness of the proposed method on causal diffusion models such as Dream remains to be further verified.\n\n2. There is concern about the method’s performance on finer-grained blocks in mainstream block-level diffusion models."
+      },
+      "questions": {
+        "value": "1. The proposed filter adopts a pure MLP architecture, which can be understood as a form of confidence-based feature engineering. Have you attempted to incorporate context-aware structures such as attention mechanisms?\n\n2. There is a typo: on line 326, it should be 256 and 1024."
+      },
+      "flag_for_ethics_review": {
+        "value": [
+          "No ethics review needed."
+        ]
+      },
+      "rating": {
+        "value": 6
+      },
+      "confidence": {
+        "value": 2
+      },
+      "code_of_conduct": {
+        "value": "Yes"
+      }
+    },
+    "id": "ivQjL7Qwbz",
+    "forum": "bFJ8Sdr224",
+    "replyto": "bFJ8Sdr224",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18792/Reviewer_Y2jx"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18792/Reviewer_Y2jx"
+    ],
+    "number": 4,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18792/-/Official_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1761912013530,
+    "cdate": 1761912013530,
+    "tmdate": 1762999988154,
+    "mdate": 1762999988154,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "title": {
+        "value": "Response to Reviewer pSk7"
+      },
+      "comment": {
+        "value": "We thank reviewer pSk7 for the insightful and valuable comments. We sincerely hope that our rebuttal has addressed your concerns. If there are any remaining issues or points that are unclear, we would be grateful to receive further feedback and will gladly continue to respond and improve the work accordingly.\n\n**1. W1: Limited model and architecture coverage: The method is evaluated exclusively on LLaDA (8B-Instruct) and not tested on other dLLMs such as DiffuLLaMA (Gong et al., 2025) or Dream (Ye et al., 2025), raising concerns about generalizability and model dependency.**\n\n**Reply:**  Thanks for this suggestion. We have conducted GSM8K experiments on Dream under generation lengths of 256 and 1024. The results show that Learn2PD achieves 1.70× and 5.84× speedups over the vanilla Dream model at generation lengths 256 and 1024, respectively. Furthermore, EoTP improves the speedup to 10.99× at generation length 1024. These results suggest that both Learn2PD and EoTP are not limited to the LLaDA model and can transfer effectively to causal diffusion dLLMs such as Dream. We have updated the manuscript to include these results in Appendix and highlighted the corresponding entries in red.\n\n| Gen Length | Methods       | TPS  | Speed  | Accuracy   |\n|-----------|--------------|-------|--------|---------|\n| 256       | Dream           | 2.38  | 1.00×  | 0.746  | \n|           | + Learn2PD | 4.04 | 1.70×  | 0.745   | \n|           | Learn2PD & EoTP    | 4.73 | 1.99× | 0.734 |\n| 1024       | Dream          | 0.38 | 1.00×  | 0.719  | \n|           | + Learn2PD  | 2.19 | 5.84×  | 0.721   |\n|           | Learn2PD & EoTP    | 4.12 | **10.99×** | 0.731 |\n\n**2.W2: Insufficient task and baseline comparisons: The empirical analysis (e.g., Figure 2) focuses only on subsets like GSM8K and HumanEval, lacking comprehensive evaluation across the full LLaDA benchmark suite. Moreover, comparisons are limited to the official LLaDA baselines, omitting key alternatives such as confidence-threshold-based or slow-fast sampling strategies.**\n\n**Reply:** Thank you for this comment. Our empirical analysis is intended primarily as an illustrative example to highlight the limitations of existing dLLMs. Therefore, to save space, we only show results on GSM8K and HumanEval. A more comprehensive evaluation across the full LLaDA benchmark suite is provided in Section 4 (Experiments). \n\nIn addition, we compare our method against other strategies. Their performance is displayed directly in their papers. We do not re-implement their methods. \n\n| Methods                    | GSM8K  | MATH   | HumanEval | MBPP     |\n|-------------------------|-----------|----------|---------------|-----------|\n| Fast-dLLM-Parallel [1]   | 2.5×       |  2.7×    | 3.3×           | 4.1×  |\n| SlowFast Sampling [2]   | 3.2×     | 2.2×      | 3.2×         | 2.7×       |\n| Learn2PD (ours)        | **4.1×**  | **3.2×** | **3.5×**        | **4.8×**  |\nAll methods achieve accuracy scores that closely match those of the original LLaDA.\n\n[1] Wu, Chengyue, et al. \"Fast-dLLM: Training-free Acceleration of Diffusion LLM by Enabling KV Cache and Parallel Decoding.\" arXiv (2025). https://arxiv.org/abs/2505.22618.\n\n[2] Wei, Qingyan, et al. \"Accelerating Diffusion Large Language Models with SlowFast Sampling: The Three Golden Principles.\" arXiv (2025). https://arxiv.org/abs/2506.10848.\n\n**3.W3: Oracle claims and training robustness: The paper claims EGP achieves 15–20× optimal speedup yet Figure 4 only reports a median of 2 steps per block without worst-case (lower-bound) analysis. Additionally, while the post-training phase is said to take “minutes,” there is no ablation on hyperparameter sensitivity (e.g., learning rate, threshold) or convergence behavior.**\n\n**Reply:** Thank you for the insightful comments. We address them in two parts:\n\n1.\tIf your question is about the details of EGP: Our EGP result is intended as an oracle-style, idealized analysis rather than a practically achievable speedup. In this oracle setting, the median number of inference steps per block is 2, which corresponds to an ideal speedup of approximately 32/2 = 16×, consistent with the “15–20×” range mentioned in the paper. The purpose of this experiment is not to present EGP as a deployable method, but to demonstrate that there is substantial space for accelerating inference process. For this reason, we did not provide a detailed quantitative study of its practical performance. If this is not what you were referring to, could you please clarify your question in more detail?\n\n2.\tRegarding the filter model, we include an ablation study on the threshold in Section 4.4. As we mentioned earlier, this task is quite simple, so the performance was quite insensitive to reasonable variations in the learning rate. The model can always eventually converge."
+      }
+    },
+    "id": "mOA50EQoq4",
+    "forum": "bFJ8Sdr224",
+    "replyto": "0fZBZ6Ni3k",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18792/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18792/Authors"
+    ],
+    "number": 3,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18792/-/Official_Comment",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1763969602928,
+    "cdate": 1763969602928,
+    "tmdate": 1770917780308,
+    "mdate": 1770917780308,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "title": {
+        "value": "Response to Reviewer yNHD"
+      },
+      "comment": {
+        "value": "We thank reviewer yNHD for the insightful and valuable comments. We sincerely hope that our rebuttal has addressed your concerns. If there are any remaining issues or points that are unclear, we would be grateful to receive further feedback and will gladly continue to respond and improve the work accordingly.\n\n**1. W1: Section 3.1.2 is difficult to understand.**\n\"We measured the amount of unnecessary and repetitive decoding, which is defined as the number of times the model continues to decode a token after that token has first matched the reference answer.\"\n**What does this sentence mean? Does this mean that the model predicts the correct token but fails to unmask it?**\n\n**Reply:** We appreciate this comment. In the original setting, the model generates a prediction for every masked token, but it does not “trust” all these predictions. Tokens with low confidence are re-masked and passed back to the model for another step of prediction. To maximize accuracy, existing dLLMs typically use a conservative strategy when deciding which tokens to re-mask, so even many tokens that have already been correctly predicted are re-masked and predicted again. And Section 3.1.2 investigates how many of these already-correct tokens are unnecessarily re-masked and decoded again. We update this paragraph in the revised version and highlight it in red.\n\n**2. W2: Figure 2 and 4 are hard to read.**\n\n**Reply:** Thank you for pointing this out. We have updated Figures 2 and 4 in the revised version to improve their readability.\n\n**3. W3: Limited Evaluation benchmarks and baselines**\n\n**Reply:**  We appreciate your comment. We have conducted GSM8K experiments on Dream under generation lengths of 256 and 1024. The results show that Learn2PD achieves 1.70× and 5.84× speedups over the vanilla Dream model at generation lengths 256 and 1024, respectively. Furthermore, EoTP improves the speedup to 10.99× at generation length 1024. These results suggest that both Learn2PD and EoTP are not limited to the LLaDA model and can transfer effectively to causal diffusion dLLMs such as Dream. We have updated the manuscript to include these results in Appendix and highlighted the corresponding entries in red.\n\n| Gen Length | Methods       | TPS  | Speed  | Accuracy    |\n|-----------|--------------|-------|--------|---------|\n| 256       | Dream           | 2.38  | 1.00×  | 0.746  | \n|           | + Learn2PD | 4.04 | 1.70×  | 0.745   | \n|           | Learn2PD & EoTP    | 4.73 | 1.99× | 0.734 |\n| 1024       | Dream          | 0.38 | 1.00×  | 0.719  | \n|           | + Learn2PD  | 2.19 | 5.84×  | 0.721   |\n|           | Learn2PD & EoTP    | 4.12 | **10.99×** | 0.731 |\n\nIn addition, we compare our method against other strategies. Their performance is displayed directly in their papers. We do not re-implement their methods.\n\n| Methods                    | GSM8K  | MATH   | HumanEval | MBPP     |\n|-------------------------|-----------|----------|---------------|-----------|\n| Fast-dLLM-Parallel [1]   | 2.5×       |  2.7×     | 3.3×             | 4.1×       |\n| SlowFast Sampling [2]   | 3.2×       | 2.2×      | 3.2×             | 2.7×       |\n| Learn2PD (ours)        | **4.1×**  | **3.2×** | **3.5×**        | **4.8×**  |\nAll methods achieve accuracy scores that closely match those of the original LLaDA."
+      }
+    },
+    "id": "oMQKa0oYyh",
+    "forum": "bFJ8Sdr224",
+    "replyto": "uq3wN106aC",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18792/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18792/Authors"
+    ],
+    "number": 5,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18792/-/Official_Comment",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1763969816238,
+    "cdate": 1763969816238,
+    "tmdate": 1770917779988,
+    "mdate": 1770917779988,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "title": {
+        "value": "Response to Reviewer Y2jx"
+      },
+      "comment": {
+        "value": "We thank reviewer Y2jx for the insightful and valuable comments. We sincerely hope that our rebuttal has addressed your concerns. If there are any remaining issues or points that are unclear, we would be grateful to receive further feedback and will gladly continue to respond and improve the work accordingly.\n\n**1. W1: The main experiments are conducted on the LLaDA model, and the effectiveness of the proposed method on causal diffusion models such as Dream remains to be further verified.**\n\n**Reply:** \nWe appreciate this comment. We have conducted GSM8K experiments on Dream under generation lengths of 256 and 1024. The results show that Learn2PD achieves 1.70× and 5.84× speedups over the vanilla Dream model at generation lengths 256 and 1024, respectively. Furthermore, EoTP improves the speedup to 10.99× at generation length 1024. These results suggest that both Learn2PD and EoTP are not limited to the LLaDA model and can transfer effectively to causal diffusion dLLMs such as Dream. We have updated the manuscript to include these results in Appendix and highlighted the corresponding entries in red.\n\n| Gen Length | Methods       | TPS  | Speed  | Accuracy   |\n|-----------|--------------|-------|--------|---------|\n| 256       | Dream           | 2.38  | 1.00×  | 0.746  | \n|           | + Learn2PD | 4.04 | 1.70×  | 0.745   | \n|           | Learn2PD & EoTP    | 4.73 | 1.99× | 0.734 |\n| 1024       | Dream          | 0.38 | 1.00×  | 0.719  | \n|           | + Learn2PD  | 2.19 | 5.84×  | 0.721   |\n|           | Learn2PD & EoTP    | 4.12 | **10.99×** | 0.731 |\n\n**2. W2: There is concern about the method’s performance on finer-grained blocks in mainstream block-level diffusion models.**\n\n**Reply:** We appreciate this helpful comment. We have evaluated our method on finer-grained blocks with a block size of 16. The results on GSM8K show that, at generation lengths 256 and 1024, Learn2PD still achieves 3.96× and 9.83× speedups, respectively. These results demonstrate that our methods remain effective under finer-grained block-level settings. For the main experiments, we adopt a block size of 32, which is the default choice in existing block-level diffusion models. [1]\n\n| Block Size | Gen Length | Methods       | TPS  | Speed  | Accuracy    |\n|-----------|--------------|--------------|-------|--------|---------|\n| 16       | 256 |  LLaDA           | 3.27  | 1.00×  | 0.7885  | \n|           |         |  + Learn2PD | 12.97 | 3.96×  | 0.7892   | \n|           |         |   Learn2PD & EoTP | 14.93 | 4.56×  | 0.7839   | \n|           | 1024 |  LLaDA | 0.57 | 1.00×  | 0.7665   | \n|           |         |  + Learn2PD | 5.58 | 9.83×  | 0.7870   | \n|           |         |   Learn2PD & EoTP | 13.69 | 24.10×  | 0.7945   | \n\n[1] Nie, Shen, et al. \"Large Language Diffusion Models.\" arXiv (2025). https://arxiv.org/abs/2502.09992.\n\n**3. Q1: The proposed filter adopts a pure MLP architecture, which can be understood as a form of confidence-based feature engineering. Have you attempted to incorporate context-aware structures such as attention mechanisms?**\n\n**Reply:** Thank you for your suggestion. The goal of our filter model is essentially a binary classification task that maps one 32-dimensional vector to another 32-dimensional vector. We firstly tested simple MLP architectures and found them capable of handling this task effectively. Therefore, we adopt a pure MLP architecture for the filter model. In particular, we compared 1-layer, 2-layer, and 4-layer MLPs and observed that the 2-layer model performed best, which further indicates that the task is relatively simple. Moreover, to maximize overall speedup, we want the filter model to introduce as little overhead as possible, which also favors a lightweight design. For these reasons, we adopt a simple 2-layer MLP as the filter model.\n\n**4. Q2: There is a typo: on line 326, it should be 256 and 1024.**\n\n**Reply:** Thank you for your suggestions. We have corrected this and highlighted it in the revised version."
+      }
+    },
+    "id": "ti41YAmOtk",
+    "forum": "bFJ8Sdr224",
+    "replyto": "ivQjL7Qwbz",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18792/Authors"
+    ],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18792/Authors"
+    ],
+    "number": 2,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18792/-/Official_Comment",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1763969564865,
+    "cdate": 1763969564865,
+    "tmdate": 1770917780394,
+    "mdate": 1770917780394,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Comment",
+    "license": "CC BY 4.0",
+    "version": 2
+  },
+  {
+    "content": {
+      "summary": {
+        "value": "This paper proposes Learn2PD and EoTP, two methods to accelerate inference in diffusion-based large language models (dLLMs), addressing inefficiencies in current parallel decoding approaches. Learn2PD trains a lightweight and adaptive filter model to predict whether the current prediction matches the final output. EoTP detects decoding completion at the end of the sequence, avoiding redundant decoding of padding tokens. With these methods, they achieve significant speedup without performance drop."
+      },
+      "soundness": {
+        "value": 2
+      },
+      "presentation": {
+        "value": 2
+      },
+      "contribution": {
+        "value": 3
+      },
+      "strengths": {
+        "value": "Decoding strategy for dllm is a very important topic. Unlike autoregressive models, dllm needs to decide which token to decode and which position to decode in each denoising step, which is much harder. This paper proposes an inspiring method by learning to predict the position that is ready to be decoded.\n\nExperimental results show that this method can accelerate the inference significantly.\n\nThe filter model only takes the confidence score as input and exhibits very good prediction results. This means that the logits contain rich information that can be leveraged."
+      },
+      "weaknesses": {
+        "value": "**Section 3.1.2 is difficult to understand.**\n> we measured the amount of unnecessary and repetitive decoding, which is defined as the number of times the model continues to decode a token after that token has first matched the reference answer\n\nWhat does this sentence mean? Does this mean that the model predicts the correct token but fails to unmask it?\n\n**Figure 2 and 4 are hard to read.**\n\n**Limited Evaluation benchmarks and baselines**"
+      },
+      "questions": {
+        "value": "see weaknesses"
+      },
+      "flag_for_ethics_review": {
+        "value": [
+          "No ethics review needed."
+        ]
+      },
+      "rating": {
+        "value": 6
+      },
+      "confidence": {
+        "value": 3
+      },
+      "code_of_conduct": {
+        "value": "Yes"
+      }
+    },
+    "id": "uq3wN106aC",
+    "forum": "bFJ8Sdr224",
+    "replyto": "bFJ8Sdr224",
+    "signatures": [
+      "ICLR.cc/2026/Conference/Submission18792/Reviewer_yNHD"
+    ],
+    "nonreaders": [],
+    "readers": [
+      "everyone"
+    ],
+    "writers": [
+      "ICLR.cc/2026/Conference",
+      "ICLR.cc/2026/Conference/Submission18792/Reviewer_yNHD"
+    ],
+    "number": 2,
+    "invitations": [
+      "ICLR.cc/2026/Conference/Submission18792/-/Official_Review",
+      "ICLR.cc/2026/Conference/-/Edit"
+    ],
+    "domain": "ICLR.cc/2026/Conference",
+    "tcdate": 1761814877222,
+    "cdate": 1761814877222,
+    "tmdate": 1762999988117,
+    "mdate": 1762999988117,
+    "parentInvitations": "ICLR.cc/2026/Conference/-/Official_Review",
+    "license": "CC BY 4.0",
+    "version": 2
+  }
+]
